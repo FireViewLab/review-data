@@ -227,6 +227,7 @@ class CollectionJobRepository:
         review_cutoff: datetime,
         failure_cutoff: datetime,
         limit: int,
+        excluded_platforms: tuple[str, ...] = (),
     ) -> list[tuple[str, str]]:
         """다시 수집할 상품을 오래된 순으로 고른다.
 
@@ -246,16 +247,20 @@ class CollectionJobRepository:
         failed_recently = exists().where(
             same_product,
             CollectionJob.status.in_(("failed", "partial")),
-            CollectionJob.completed_at > failure_cutoff,
+            # 완료 시각이 비어 있는 실패 이력(수동 정리 등)이 대기를 건너뛰지 않게 한다.
+            func.coalesce(CollectionJob.completed_at, CollectionJob.updated_at) > failure_cutoff,
         )
         stmt = (
             select(ProductRow.platform, ProductRow.product_id)
             .where(
+                # 조회 API 는 "지난 시간 < TTL" 일 때만 신선하다고 본다. 정확히 TTL 인
+                # 상품도 낡은 것이므로 <= 로 맞춘다.
                 or_(
-                    ProductRow.last_collected_at < product_cutoff,
+                    ProductRow.last_collected_at <= product_cutoff,
                     ProductRow.reviews_last_collected_at.is_(None),
-                    ProductRow.reviews_last_collected_at < review_cutoff,
+                    ProductRow.reviews_last_collected_at <= review_cutoff,
                 ),
+                ProductRow.platform.not_in(excluded_platforms),
                 ~has_active_job,
                 ~failed_recently,
             )

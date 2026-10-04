@@ -223,7 +223,10 @@ async def _run_worker(once: bool, poll_interval: float) -> None:
 def scheduler(
     once: bool = typer.Option(False, "--once", help="한 번만 예약하고 종료합니다"),
     interval: float | None = typer.Option(
-        None, "--interval", help="예약 주기(초). 비우면 SCHEDULE_INTERVAL_SECONDS 를 씁니다"
+        None,
+        "--interval",
+        min=1.0,
+        help="예약 주기(초). 비우면 SCHEDULE_INTERVAL_SECONDS 를 씁니다",
     ),
 ) -> None:
     """낡은 상품을 찾아 수집 job 을 주기적으로 예약합니다.

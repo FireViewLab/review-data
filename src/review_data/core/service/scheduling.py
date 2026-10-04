@@ -9,12 +9,15 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.db.repository import CollectionJobRepository
 from review_data.core.settings import Settings, get_settings
 
 REQUESTED_BY = "scheduler"
+# 스케줄러끼리만 쓰는 잠금 번호. 값 자체에 의미는 없고 다른 잠금과 겹치지만 않으면 된다.
+_SCHEDULER_LOCK_KEY = 5_050_001
 
 
 @dataclass
@@ -31,6 +34,9 @@ class SchedulingService:
 
     async def run_once(self, now: datetime | None = None) -> ScheduleResult:
         now = now or datetime.now(UTC)
+        # 대기 수를 세고 예약하는 사이에 다른 스케줄러가 끼어들면 둘 다 "자리가 있다"고
+        # 보고 상한을 넘긴다. 트랜잭션이 끝날 때까지 스케줄러를 한 번에 하나만 돌린다.
+        await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
         pending = await self.jobs.count_pending()
         room = self.settings.schedule_max_pending - pending
         if room <= 0:
@@ -42,6 +48,7 @@ class SchedulingService:
             failure_cutoff=now
             - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
             limit=room,
+            excluded_platforms=self._excluded_platforms(),
         )
         created = 0
         for platform, product_id in candidates:
@@ -52,3 +59,7 @@ class SchedulingService:
             )
             created += was_created
         return ScheduleResult(pending_before=pending, created=created)
+
+    def _excluded_platforms(self) -> tuple[str, ...]:
+        raw = self.settings.schedule_excluded_platforms
+        return tuple(name.strip() for name in raw.split(",") if name.strip())

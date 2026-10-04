@@ -83,13 +83,13 @@ class CollectionService:
             job=job,
         )
 
-    def _is_fresh(self, product: ProductRow) -> bool:
+    def _is_fresh(self, product: ProductRow, now: datetime | None = None) -> bool:
         """상품과 리뷰가 '둘 다' 신선할 때만 신선하다고 본다.
 
         상품만 보고 판단하면, 리뷰 수집이 실패한 부분 실패(partial) 상품이 TTL이
         끝날 때까지 리뷰 없이 fresh로 굳어 재수집이 막힌다.
         """
-        now = datetime.now(UTC)
+        now = now or datetime.now(UTC)
         if not self._within(product.last_collected_at, self.settings.product_ttl_seconds, now):
             return False
         return self._within(

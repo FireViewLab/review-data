@@ -4,8 +4,10 @@
 큐를 넘치게 하거나 실패한 상품을 계속 두드려서는 안 된다.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select, update
 
 from review_data.core.db.models import CollectionJob, ProductRow
@@ -112,20 +114,38 @@ async def test_stale_reviews_alone_are_enough(session_factory):
     assert {j.product_id for j in await _jobs(session_factory)} == {"rev-old", "rev-none"}
 
 
-async def test_matches_api_freshness_rule(session_factory):
-    """스케줄러가 건너뛴 상품은 조회에서도 fresh 여야 한다. 기준이 어긋나면 안 된다."""
-    await _add_product(session_factory, "edge", product_age_hours=23.9, review_age_hours=5.9)
+@pytest.mark.parametrize(
+    ("product_age_hours", "review_age_hours"),
+    [
+        (23.99, 5.99),  # 둘 다 TTL 직전
+        (24, 1),  # 상품이 정확히 TTL
+        (24.01, 1),
+        (1, 6),  # 리뷰가 정확히 TTL
+        (1, 6.01),
+        (1, None),  # 리뷰 미수집
+    ],
+)
+async def test_agrees_with_api_freshness_rule(
+    session_factory, product_age_hours, review_age_hours
+):
+    """같은 시각·같은 상품에 대해 "조회에서 stale" 과 "스케줄 대상" 이 항상 같아야 한다.
+
+    어긋나면 스케줄러가 돌았는데도 조회에서 stale 로 나오거나, 그 반대가 된다.
+    """
+    await _add_product(
+        session_factory,
+        "edge",
+        product_age_hours=product_age_hours,
+        review_age_hours=review_age_hours,
+    )
 
     result = await _schedule(session_factory)
 
-    assert result.created == 0
     async with session_factory() as s:
         service = CollectionService(s, SETTINGS)
         product = await service.products.get(PLATFORM, "edge")
-        # _is_fresh 는 현재 시각을 쓰므로 같은 간격을 지금 기준으로 다시 맞춘다.
-        product.last_collected_at = datetime.now(UTC) - timedelta(hours=23.9)
-        product.reviews_last_collected_at = datetime.now(UTC) - timedelta(hours=5.9)
-        assert service._is_fresh(product)
+        stale_for_api = not service._is_fresh(product, now=NOW)
+    assert bool(result.created) is stale_for_api
 
 
 async def test_product_with_active_job_is_skipped(session_factory):
@@ -214,3 +234,50 @@ async def test_running_twice_does_not_duplicate(session_factory):
 
     assert (first.created, second.created) == (2, 0)
     assert len(await _jobs(session_factory)) == 2
+
+
+async def test_failure_without_completed_at_still_waits(session_factory):
+    # 완료 시각 없이 실패로 남은 이력(수동 정리 등)도 대기 시간을 지켜야 한다.
+    await _add_product(session_factory, "manual", product_age_hours=30, review_age_hours=None)
+    async with session_factory() as s:
+        s.add(
+            CollectionJob(
+                platform=PLATFORM, product_id="manual", idempotency_key="k", status="failed"
+            )
+        )
+        await s.commit()
+
+    result = await _schedule(session_factory)
+
+    assert result.created == 0
+
+
+async def test_excluded_platform_is_never_scheduled(session_factory):
+    settings = SETTINGS.model_copy(
+        update={"schedule_excluded_platforms": f"other, {PLATFORM} "}
+    )
+    await _add_product(session_factory, "blocked", product_age_hours=30, review_age_hours=30)
+
+    result = await _schedule(session_factory, settings)
+
+    assert result.created == 0
+
+
+async def test_concurrent_schedulers_respect_pending_limit(session_factory):
+    """두 스케줄러가 동시에 돌아도 대기 상한을 넘기지 않는다."""
+    settings = SETTINGS.model_copy(update={"schedule_max_pending": 1})
+    for name in ("a", "b", "c"):
+        await _add_product(session_factory, name, product_age_hours=30, review_age_hours=30)
+
+    results = await asyncio.gather(
+        *(_schedule(session_factory, settings) for _ in range(4))
+    )
+
+    assert sum(r.created for r in results) == 1
+    assert len(await _jobs(session_factory)) == 1
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_interval_must_be_positive(value):
+    with pytest.raises(ValueError):
+        Settings(schedule_interval_seconds=value)

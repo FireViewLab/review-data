@@ -64,8 +64,12 @@ crawler collect -k 텀블러 -n 30            # 키워드/개수 직접 지정
 crawler reviews elevenst 123456 -n 100    # 특정 상품의 리뷰 수집
 crawler worker                            # 수집 job 을 처리하는 워커 (Ctrl+C 로 종료)
 crawler worker --once                     # job 하나만 처리하고 종료
+crawler scheduler                         # 낡은 상품을 주기적으로 다시 예약 (워커와 함께 실행)
+crawler scheduler --once                  # 한 번만 예약하고 종료
 crawler serve                             # API 서버 (localhost:8000/docs)
 ```
+
+스케줄러는 DB 에 있는 상품 중 낡은 것(상품 24시간, 리뷰 6시간)을 찾아 수집 job 을 만듭니다. 조회가 없어도 데이터가 최신으로 유지됩니다. 대기 중인 job 이 20개를 넘으면 더 만들지 않고, 수집이 실패한 상품은 6시간 뒤에 다시 시도합니다. 플랫폼 전체가 차단돼 있으면 `SCHEDULE_EXCLUDED_PLATFORMS` 로 스케줄 대상에서 뺍니다. 기본 설정(5분마다 최대 20건)으로는 시간당 약 240건까지 예약하므로, 상품이 많아지면 주기와 상한을 조정해야 합니다.
 
 `collect` 와 `reviews` 는 직접 수집해 바로 저장합니다. API 가 만든 job 을 처리하려면 `crawler worker` 를 띄워야 합니다 — 워커가 없으면 job 이 `pending` 으로 쌓이기만 합니다.
 
