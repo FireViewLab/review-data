@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     collect_timeout_seconds: float = 120.0
     browser_collect_timeout_seconds: float = 300.0
 
+    # ── 스케줄러 ───────────────────────────
+    # 낡은 상품을 찾아 수집 job 을 예약하는 주기(초).
+    schedule_interval_seconds: float = 300.0
+    # 대기 중인 job 이 이만큼 쌓여 있으면 더 예약하지 않는다. 워커가 소화하는 속도보다
+    # 빨리 쌓이면 큐만 길어지고, 조회로 들어온 급한 job 이 뒤로 밀린다.
+    schedule_max_pending: int = 20
+    # 수집이 실패한 상품을 다시 예약하기까지 기다리는 시간(초). 차단된 플랫폼을
+    # 주기마다 다시 두드리지 않기 위한 것이다.
+    schedule_failure_cooldown_seconds: int = 6 * 60 * 60
+
     # ── 플랫폼별 인증 정보 ──────────────────
     # 자기 플랫폼에 키가 필요하면 여기에 추가하고,
     # .env.example 에도 반드시 빈 값으로 추가하세요.
