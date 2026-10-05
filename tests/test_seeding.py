@@ -378,3 +378,21 @@ async def test_dry_run_does_not_expand():
 def test_invalid_expand_is_rejected(tmp_path, content):
     with pytest.raises(ValueError):
         load_seed_file(_file(tmp_path, content), {"naver": _Collector})
+
+
+async def test_already_collected_product_is_not_queued_again(session_factory):
+    """시드를 다시 실행해도 이미 수집된 상품을 재예약하지 않는다. 갱신은 스케줄러 몫이다."""
+    async with session_factory() as s:
+        await ProductRepository(s).upsert(
+            Product(platform=PLATFORM, product_id="done", name="수집됨", url="https://x")
+        )
+        await s.commit()
+    service = SeedingService({PLATFORM: _RelatedCollector}, session_factory, SETTINGS)
+
+    result = await service.run(SeedPlan(3, {}, {PLATFORM: ("done",)}, {PLATFORM: 1}))
+
+    async with session_factory() as s:
+        ids = set((await s.execute(select(CollectionJob.product_id))).scalars())
+    # 지정 상품은 건너뛰고, 아직 없는 관련 상품만 예약한다.
+    assert result[PLATFORM].created == 1
+    assert ids == {"done-r0"}

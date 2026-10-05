@@ -163,6 +163,10 @@ class SeedingService:
 
     async def _seed_product(self, platform: str, product_id: str) -> bool:
         async with self.session_factory() as session:
+            # 이미 수집된 상품은 스케줄러가 갱신한다. 여기서 또 예약하면 시드를 다시
+            # 실행할 때마다 전체를 재수집하게 된다.
+            if await ProductRepository(session).get(platform, product_id) is not None:
+                return False
             _, created = await CollectionJobRepository(session).create_or_get_active(
                 platform, product_id, requested_by="seed"
             )

@@ -39,6 +39,7 @@ RELATED_SCROLL_STEPS = 6
 BLOCKED_STATUSES = {418, 429, 490}
 BLOCK_MARKERS = ("captcha", "보안 확인", "접속이 일시적으로 제한")
 RESPONSE_TIMEOUT_SECONDS = 15.0
+REVIEW_TAB_TIMEOUT_MS = 10_000
 
 
 def parse_product_id(product_id: str) -> tuple[str, str]:
@@ -309,9 +310,14 @@ class NaverCollector(BrowserCollector):
             raise ParseError(f"[naver] 페이지 요청 실패: HTTP {status} ({url})")
 
     async def _open_review_tab(self, page: Page) -> None:
-        tab = page.get_by_text(REVIEW_TAB_TEXT).first
-        if not await tab.count():
-            return
+        # 같은 글자의 탭이 숨겨진 고정 헤더에도 있다. 숨겨진 쪽을 누르면 아무 일도 일어나지
+        # 않으므로 화면에 보이는 것만 고른다.
+        tab = page.get_by_text(REVIEW_TAB_TEXT).locator("visible=true").first
+        # 탭은 상품 정보보다 늦게 그려진다. 바로 찾으면 아직 없어서 리뷰를 통째로 놓친다.
+        try:
+            await tab.wait_for(state="visible", timeout=REVIEW_TAB_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            return  # 리뷰가 없는 상품은 탭에 개수가 붙지 않는다.
         await tab.scroll_into_view_if_needed()
         # 탭 위에 고정 헤더가 겹쳐 일반 클릭이 막힌다. 사람이 누르는 것과 같은 클릭 이벤트다.
         await tab.click(force=True)

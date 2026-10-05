@@ -114,7 +114,7 @@ Python·Chromium·Postgres 를 따로 설치하지 않고 한 번에 띄웁니�
 ```bash
 cp .env.example .env
 docker compose up --build       # Postgres → 마이그레이션 → API + 워커
-docker compose run --rm worker crawler seed  # 기본 수집 대상 넣기
+docker compose run --rm worker sh -c "Xvfb :99 -screen 0 1280x800x24 -nolisten tcp & exec crawler seed"  # 기본 수집 대상 넣기
 docker compose logs -f worker   # 수집 진행 상황
 docker compose down             # 종료 (데이터는 볼륨에 남음, 지우려면 -v)
 ```
