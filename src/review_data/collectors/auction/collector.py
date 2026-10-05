@@ -236,6 +236,10 @@ def _parse_review_page(raw_html: str, platform: str, product_id: str) -> list[Re
     for li in soup.select("li.list-item[data-review-seq]"):
         review_id = li["data-review-seq"]
         content_el = li.select_one(".box__review-text .text")
+        content = content_el.get_text(strip=True) if content_el else ""
+        # 내용 없이 별점만 남긴 리뷰는 표준 모델이 받지 않는다. 건너뛴다.
+        if not content:
+            continue
         author_el = li.select_one(".text__writer")
         date_el = li.select_one(".text__date")
         option_el = li.select_one(".text__option-selected")
@@ -266,7 +270,7 @@ def _parse_review_page(raw_html: str, platform: str, product_id: str) -> list[Re
                 platform=platform,
                 product_id=product_id,
                 review_id=review_id,
-                content=content_el.get_text(strip=True) if content_el else "",
+                content=content,
                 rating=rating,
                 author=author_el.get_text(strip=True) if author_el else None,
                 written_at=written_at,

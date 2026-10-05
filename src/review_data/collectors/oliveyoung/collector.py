@@ -196,7 +196,10 @@ class OliveyoungCollector(BaseCollector):
 
     def _parse_review(self, product_id: str, item: dict) -> Review | None:
         review_id = item.get("reviewId")
-        if review_id is None:
+        content = (item.get("content") or "").strip()
+        # 내용 없이 별점만 남긴 리뷰는 표준 모델이 받지 않는다. 한 건 때문에 상품의 리뷰
+        # 수집 전체가 실패하지 않도록 건너뛴다.
+        if review_id is None or not content:
             return None
 
         profile = item.get("profileDto") or {}
@@ -212,7 +215,7 @@ class OliveyoungCollector(BaseCollector):
             platform=self.platform,
             product_id=product_id,
             review_id=str(review_id),
-            content=item.get("content") or "",
+            content=content,
             rating=float(score) if score is not None else None,
             author=profile.get("memberNickname") or None,
             written_at=_parse_date(item.get("createdDateTime")),

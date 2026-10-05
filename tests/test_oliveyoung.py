@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import pytest
+
 from review_data.collectors.oliveyoung.collector import (
     OliveyoungCollector,
     _parse_date,
@@ -85,6 +87,12 @@ def test_parse_review_without_photos():
 
 async def test_search_empty_keyword_returns_empty():
     assert await _collector().search_products("", limit=10) == []
+
+
+@pytest.mark.parametrize("content", [None, "", "   "])
+def test_parse_review_without_content_is_skipped(content):
+    # 별점만 남긴 리뷰 하나 때문에 상품의 리뷰 수집 전체가 실패하면 안 된다.
+    assert _collector()._parse_review("A1", {**REVIEW_ITEM, "content": content}) is None
 
 
 async def test_reviews_limit_zero_returns_empty():

@@ -102,6 +102,13 @@ async def test_search_empty_keyword_returns_empty():
     assert await _collector().search_products("", limit=10) == []
 
 
+def test_parse_review_without_content_is_skipped():
+    # 별점만 남긴 리뷰 하나 때문에 상품의 리뷰 수집 전체가 실패하면 안 된다.
+    html = REVIEW_LI.replace("생각보다 튼튼하고 좋아요", "")
+    element = BeautifulSoup(html, "lxml").select_one("li.review_list_element")
+    assert _collector()._parse_review("123", element) is None
+
+
 async def test_reviews_limit_zero_returns_empty():
     assert await _collector().get_reviews("123", limit=0) == []
 

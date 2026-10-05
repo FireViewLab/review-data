@@ -106,7 +106,10 @@ def _parse_review(item: dict[str, Any], product_id: str) -> Review | None:
         written_at=_parse_datetime(item.get("createDate")),
         option=item.get("goodsOption"),
         images=[
-            url for img in item.get("images", []) if (url := _image_url(img.get("imageUrl")))
+            # images 키는 있는데 값이 null 로 올 때가 있다.
+            url
+            for img in item.get("images") or []
+            if (url := _image_url(img.get("imageUrl")))
         ],
         helpful_count=item.get("likeCount"),
     )
