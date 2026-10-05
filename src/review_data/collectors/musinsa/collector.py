@@ -20,6 +20,8 @@ from review_data.core.models import Product, Review
 IMAGE_BASE = "https://image.msscdn.net"
 SEARCH_URL = "https://www.musinsa.com/search/goods"
 PRODUCT_URL = "https://www.musinsa.com/products/{product_id}"
+# 리뷰 API 는 pageSize 가 20 을 넘으면 400 을 준다 (2026-10 확인).
+REVIEW_PAGE_SIZE_MAX = 20
 REVIEW_API = "https://goods.musinsa.com/api2/review/v1/view/list"
 
 _NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
@@ -58,6 +60,58 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def _parse_search_items(items: list[dict[str, Any]], limit: int) -> list[Product]:
+    """검색 결과 항목을 상품으로 바꾼다.
+
+    목록에는 상품 사이에 배너 같은 항목이 섞여 온다. 그런 항목에는 상품 이름과 링크가
+    없으므로 건너뛴다. 하나 때문에 검색 전체가 실패하면 안 된다.
+    """
+    products: list[Product] = []
+    for item in items:
+        if not item.get("goodsName") or not item.get("goodsLinkUrl"):
+            continue
+        review_score = item.get("reviewScore")
+        products.append(
+            Product(
+                platform="musinsa",
+                product_id=str(item["goodsNo"]),
+                name=item["goodsName"],
+                url=item["goodsLinkUrl"],
+                brand=item.get("brandName") or item.get("brand"),
+                price=item.get("finalPrice") or item.get("price"),
+                thumbnail_url=item.get("thumbnail"),
+                review_count=item.get("reviewCount"),
+                rating=round(review_score / 20, 1) if review_score is not None else None,
+            )
+        )
+        if len(products) >= limit:
+            break
+    return products
+
+
+def _parse_review(item: dict[str, Any], product_id: str) -> Review | None:
+    """리뷰 한 건을 표준 모델로 바꾼다. 내용이 없는 리뷰(별점만)는 저장할 수 없어 버린다."""
+    content = (item.get("content") or "").strip()
+    if not content:
+        return None
+    grade = item.get("grade")
+    profile = item.get("userProfileInfo") or {}
+    return Review(
+        platform="musinsa",
+        product_id=product_id,
+        review_id=str(item["no"]),
+        content=content,
+        rating=float(grade) if grade is not None else None,
+        author=profile.get("userNickName"),
+        written_at=_parse_datetime(item.get("createDate")),
+        option=item.get("goodsOption"),
+        images=[
+            url for img in item.get("images", []) if (url := _image_url(img.get("imageUrl")))
+        ],
+        helpful_count=item.get("likeCount"),
+    )
+
+
 class MusinsaCollector(BaseCollector):
     platform = "musinsa"
     label = "무신사"
@@ -75,23 +129,7 @@ class MusinsaCollector(BaseCollector):
             for page in goods_data.get("pages", []):
                 items.extend(page.get("items", []))
 
-        products = []
-        for item in items[:limit]:
-            review_score = item.get("reviewScore")
-            products.append(
-                Product(
-                    platform=self.platform,
-                    product_id=str(item["goodsNo"]),
-                    name=item["goodsName"],
-                    url=item["goodsLinkUrl"],
-                    brand=item.get("brandName") or item.get("brand"),
-                    price=item.get("finalPrice") or item.get("price"),
-                    thumbnail_url=item.get("thumbnail"),
-                    review_count=item.get("reviewCount"),
-                    rating=round(review_score / 20, 1) if review_score is not None else None,
-                )
-            )
-        return products
+        return _parse_search_items(items, limit)
 
     async def get_product(self, product_id: str) -> Product:
         url = PRODUCT_URL.format(product_id=product_id)
@@ -127,7 +165,7 @@ class MusinsaCollector(BaseCollector):
 
     async def get_reviews(self, product_id: str, limit: int = 50) -> list[Review]:
         reviews: list[Review] = []
-        page_size = min(limit, 50) or 1
+        page_size = max(min(limit, REVIEW_PAGE_SIZE_MAX), 1)
         page = 0
 
         while len(reviews) < limit:
@@ -151,26 +189,9 @@ class MusinsaCollector(BaseCollector):
                 break
 
             for item in batch:
-                grade = item.get("grade")
-                profile = item.get("userProfileInfo") or {}
-                reviews.append(
-                    Review(
-                        platform=self.platform,
-                        product_id=product_id,
-                        review_id=str(item["no"]),
-                        content=item.get("content") or "",
-                        rating=float(grade) if grade is not None else None,
-                        author=profile.get("userNickName"),
-                        written_at=_parse_datetime(item.get("createDate")),
-                        option=item.get("goodsOption"),
-                        images=[
-                            url
-                            for img in item.get("images", [])
-                            if (url := _image_url(img.get("imageUrl")))
-                        ],
-                        helpful_count=item.get("likeCount"),
-                    )
-                )
+                review = _parse_review(item, product_id)
+                if review is not None:
+                    reviews.append(review)
 
             page += 1
             total_pages = payload.get("page", {}).get("totalPages", page)
