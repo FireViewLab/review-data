@@ -259,6 +259,11 @@ async def _run_seed(file: Path, dry_run: bool) -> None:
                     typer.echo(f"[{platform}] 검색 예정: {keyword} (최대 {plan.per_keyword}개)")
                 for product_id in plan.products.get(platform, ()):
                     typer.echo(f"[{platform}] 예약 예정: {product_id}")
+                if platform in plan.expand:
+                    typer.echo(
+                        f"[{platform}] 지정 상품마다 관련 상품 "
+                        f"최대 {plan.expand[platform]}개 예약 예정"
+                    )
             typer.echo(
                 f"[{platform}] 저장 {result.saved}건, 예약 {result.created}건, "
                 f"실패 {len(result.errors)}건"

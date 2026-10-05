@@ -114,6 +114,7 @@ def test_default_seed_matches_spec():
         "elevenst": ("생수", "물티슈", "이어폰", "보조배터리", "영양제"),
     }
     assert plan.products == {"naver": ("zinus:6000252751",)}
+    assert plan.expand == {"naver": 20}
 
 
 async def test_keywords_saved_and_direct_products_queued_without_duplicates(session_factory):
@@ -121,7 +122,8 @@ async def test_keywords_saved_and_direct_products_queued_without_duplicates(sess
     plan = SeedPlan(3, {PLATFORM: ("선크림",)}, {PLATFORM: ("direct",)})
     first = await service.run(plan)
     second = await service.run(plan)
-    assert first[PLATFORM].saved == second[PLATFORM].saved == 1
+    # 재실행에서는 이미 있는 상품을 다시 저장하지 않는다.
+    assert (first[PLATFORM].saved, second[PLATFORM].saved) == (1, 0)
     assert first[PLATFORM].created == 1 and second[PLATFORM].created == 0
     assert _Collector.calls == [("선크림", 3), ("선크림", 3)]
     async with session_factory() as s:
@@ -223,7 +225,8 @@ async def test_existing_review_collection_time_is_preserved(session_factory):
         await service.run(SeedPlan(20, {PLATFORM: ("새이름",)}, {}))
     async with session_factory() as s:
         row = await ProductRepository(s).get(PLATFORM, "one")
-        assert row.name == "새이름"
+        # 이미 있는 상품은 검색 결과로 덮어쓰지 않는다.
+        assert row.name == "기존"
         assert row.reviews_last_collected_at == timestamp
 
 
@@ -296,3 +299,82 @@ async def test_direct_job_failure_does_not_stop_next_product(session_factory, mo
     assert results[PLATFORM].created == 1 and len(results[PLATFORM].errors) == 1
     async with session_factory() as s:
         assert await CollectionJobRepository(s).get_active(PLATFORM, "good") is not None
+
+
+async def test_rerun_does_not_overwrite_detailed_product(session_factory):
+    """검색 결과는 상세 수집보다 정보가 적다. 재실행이 상세 정보를 지우면 안 된다."""
+    collected_at = datetime(2026, 10, 1, tzinfo=UTC)
+    async with session_factory() as s:
+        await ProductRepository(s).upsert(
+            Product(
+                platform=PLATFORM,
+                product_id="one",
+                name="상세 이름",
+                url="https://x",
+                brand="브랜드",
+            )
+        )
+        await s.execute(update(ProductRow).values(last_collected_at=collected_at))
+        await s.commit()
+
+    result = await SeedingService({PLATFORM: _Collector}, session_factory, SETTINGS).run(
+        SeedPlan(3, {PLATFORM: ("선크림",)}, {})
+    )
+
+    assert result[PLATFORM].saved == 0
+    async with session_factory() as s:
+        row = await ProductRepository(s).get(PLATFORM, "one")
+        assert (row.name, row.brand, row.last_collected_at) == ("상세 이름", "브랜드", collected_at)
+
+
+class _RelatedCollector(_Collector):
+    async def related_products(self, product_id: str, limit: int = 20) -> list[str]:
+        if product_id == "broken":
+            raise RuntimeError("차단")
+        return [f"{product_id}-r{i}" for i in range(limit + 5)]
+
+
+async def test_expand_queues_related_products_up_to_limit(session_factory):
+    service = SeedingService({PLATFORM: _RelatedCollector}, session_factory, SETTINGS)
+    plan = SeedPlan(3, {}, {PLATFORM: ("a", "broken", "b")}, {PLATFORM: 2})
+
+    first = await service.run(plan)
+    second = await service.run(plan)
+
+    # 지정 상품 3개 + 관련 상품 2개씩(a, b). broken 의 실패는 나머지를 막지 않는다.
+    assert first[PLATFORM].created == 7
+    assert len(first[PLATFORM].errors) == 1 and "broken" in first[PLATFORM].errors[0]
+    assert second[PLATFORM].created == 0
+    async with session_factory() as s:
+        ids = set((await s.execute(select(CollectionJob.product_id))).scalars())
+    assert ids == {"a", "broken", "b", "a-r0", "a-r1", "b-r0", "b-r1"}
+
+
+async def test_expand_reports_unsupported_platform(session_factory):
+    service = SeedingService({PLATFORM: _Collector}, session_factory, SETTINGS)
+
+    result = await service.run(SeedPlan(3, {}, {PLATFORM: ("a",)}, {PLATFORM: 2}))
+
+    assert result[PLATFORM].created == 1
+    assert "지원하지 않습니다" in result[PLATFORM].errors[0]
+
+
+async def test_dry_run_does_not_expand():
+    service = SeedingService({PLATFORM: _RelatedCollector}, None, SETTINGS)
+
+    result = await service.run(SeedPlan(3, {}, {PLATFORM: ("a",)}, {PLATFORM: 2}), dry_run=True)
+
+    assert result[PLATFORM].created == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'per_keyword = 1\n[expand]\nnaver = 5',  # products 없이 expand 만
+        'per_keyword = 1\n[products]\nnaver = ["a:1"]\n[expand]\nnaver = 0',
+        'per_keyword = 1\n[products]\nnaver = ["a:1"]\n[expand]\nnaver = "많이"',
+    ],
+)
+def test_invalid_expand_is_rejected(tmp_path, content):
+    with pytest.raises(ValueError):
+        load_seed_file(_file(tmp_path, content), {"naver": _Collector})

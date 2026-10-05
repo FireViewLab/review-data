@@ -1,0 +1,108 @@
+{
+  "simple_products": [
+    {
+      "id": 9524657101,
+      "productNo": 9479706796,
+      "name": "지누스 얼티마 에어 하이브리드 스프링 매트리스 (30cm/슈퍼싱글)",
+      "channel": {
+        "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+        "channelName": "지누스몰"
+      },
+      "productStatusType": "SALE"
+    },
+    {
+      "id": 11887628580,
+      "productNo": 11832706965,
+      "name": "지누스 피치스킨 매트리스 방수커버 (슈퍼싱글)",
+      "channel": {
+        "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+        "channelName": "지누스몰"
+      },
+      "productStatusType": "SALE"
+    },
+    {
+      "id": 8435643749,
+      "productNo": 8395414739,
+      "name": "지누스 얼티마 에어 하이브리드 스프링 매트리스 (25cm/슈퍼싱글)",
+      "channel": {
+        "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+        "channelName": "지누스몰"
+      },
+      "productStatusType": "SALE"
+    },
+    {
+      "id": 6000252751,
+      "productNo": 5972194390,
+      "name": "방문한 상품",
+      "channel": {
+        "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+        "channelName": "지누스몰"
+      },
+      "productStatusType": "SALE"
+    },
+    {
+      "id": 333,
+      "productNo": 444,
+      "name": "판매 중지 상품",
+      "channel": {
+        "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+        "channelName": "지누스몰"
+      },
+      "productStatusType": "SUSPENSION"
+    }
+  ],
+  "other_recommend": {
+    "products": [
+      {
+        "id": 3744162440,
+        "productNo": 3737824341,
+        "name": "지누스 1500H 침대 프레임 (퀸)",
+        "channel": {
+          "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+          "channelName": "지누스몰"
+        },
+        "productStatusType": "SALE"
+      },
+      {
+        "id": 6000123816,
+        "productNo": 5972066288,
+        "name": "지누스 퀵스냅 침대 프레임 (슈퍼싱글)",
+        "channel": {
+          "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+          "channelName": "지누스몰"
+        },
+        "productStatusType": "SALE"
+      },
+      {
+        "id": 3744166541,
+        "productNo": 3737828365,
+        "name": "지누스 퀵스냅 침대 프레임 (퀸)",
+        "channel": {
+          "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+          "channelName": "지누스몰"
+        },
+        "productStatusType": "SALE"
+      },
+      {
+        "id": 111,
+        "productNo": 222,
+        "name": "다른 스토어 상품",
+        "channel": {
+          "channelUid": "OTHERSTOREUID",
+          "channelName": "다른몰"
+        },
+        "productStatusType": "SALE"
+      },
+      {
+        "id": 9524657101,
+        "productNo": 9479706796,
+        "name": "지누스 얼티마 에어 하이브리드 스프링 매트리스 (30cm/슈퍼싱글)",
+        "channel": {
+          "channelUid": "2sWDwlB4wqRisSBxpyXQW",
+          "channelName": "지누스몰"
+        },
+        "productStatusType": "SALE"
+      }
+    ]
+  }
+}

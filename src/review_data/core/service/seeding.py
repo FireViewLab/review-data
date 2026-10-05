@@ -20,13 +20,15 @@ class SeedPlan:
     per_keyword: int
     keywords: dict[str, tuple[str, ...]]
     products: dict[str, tuple[str, ...]]
+    # 지정 상품마다 같은 판매처의 상품을 몇 개까지 더 찾을지. 검색이 안 되는 플랫폼용.
+    expand: dict[str, int] = field(default_factory=dict)
 
 
 def load_seed_file(path: Path, registry: Mapping[str, type[BaseCollector]]) -> SeedPlan:
     """실행 전에 전체 파일을 검증해 오타 때문에 일부만 저장되는 것을 막는다."""
     with path.open("rb") as file:
         data = tomllib.load(file)
-    unknown = data.keys() - {"per_keyword", "keywords", "products"}
+    unknown = data.keys() - {"per_keyword", "keywords", "products", "expand"}
     if unknown:
         raise ValueError(f"지원하지 않는 시드 종류: {', '.join(sorted(unknown))}")
     limit = data.get("per_keyword", 20)
@@ -48,7 +50,16 @@ def load_seed_file(path: Path, registry: Mapping[str, type[BaseCollector]]) -> S
             result[platform] = tuple(dict.fromkeys(value.strip() for value in values))
         return result
 
-    return SeedPlan(limit, section("keywords"), section("products"))
+    products = section("products")
+    expand = data.get("expand", {})
+    if not isinstance(expand, dict):
+        raise ValueError("expand 는 플랫폼별 테이블이어야 합니다.")
+    for platform, count in expand.items():
+        if platform not in products:
+            raise ValueError(f"expand.{platform} 는 products.{platform} 가 있어야 합니다.")
+        if type(count) is not int or count <= 0:
+            raise ValueError(f"expand.{platform} 는 양의 정수여야 합니다.")
+    return SeedPlan(limit, section("keywords"), products, dict(expand))
 
 
 @dataclass
@@ -110,7 +121,27 @@ class SeedingService:
                 except Exception as exc:  # noqa: BLE001 - 다른 상품 예약은 계속한다
                     result.errors.append(f"상품 {product_id}: {exc}")
                     logger.exception("[%s] 상품 예약 실패: %s", platform, product_id)
+            if platform in plan.expand and not dry_run:
+                await self._expand(platform, product_ids, plan.expand[platform], result)
         return results
+
+    async def _expand(
+        self, platform: str, product_ids: tuple[str, ...], limit: int, result: SeedResult
+    ) -> None:
+        """지정 상품에서 같은 판매처의 상품을 더 찾아 예약한다.
+
+        네이버처럼 검색 수단이 없는 플랫폼은 상품 하나를 알아야 다른 상품을 알 수 있다.
+        """
+        for product_id in product_ids:
+            logger.info("[%s] 관련 상품 찾기: %s (최대 %d개)", platform, product_id, limit)
+            try:
+                async with self.registry[platform](settings=self.settings) as collector:
+                    related = await collector.related_products(product_id, limit=limit)
+                for related_id in related[:limit]:
+                    result.created += await self._seed_product(platform, related_id)
+            except Exception as exc:  # noqa: BLE001 - 다른 상품의 확장은 계속한다
+                result.errors.append(f"관련 상품 {product_id}: {exc}")
+                logger.exception("[%s] 관련 상품 찾기 실패: %s", platform, product_id)
 
     async def _seed_keyword(self, collector: BaseCollector, keyword: str, limit: int) -> int:
         products = await collector.search_products(keyword, limit=limit)
@@ -121,6 +152,10 @@ class SeedingService:
             for product in products[:limit]:
                 if product.platform != collector.platform:
                     raise ValueError("검색 결과의 플랫폼이 collector 와 다릅니다.")
+                # 검색 결과는 상세 수집보다 정보가 적다. 이미 있는 상품을 덮어쓰면 상세
+                # 정보가 지워지고 수집 시각만 새로워져 재수집이 밀린다. 새 상품만 넣는다.
+                if await repo.get(product.platform, product.product_id) is not None:
+                    continue
                 await repo.upsert(product)
                 saved.add(product.product_id)
             await session.commit()
