@@ -71,6 +71,16 @@ services:
     stop_signal: SIGINT
     mem_limit: 2g
 
+  # 조회가 없어도 낡은 상품을 다시 수집하도록 job 을 예약한다. 크롤링은 worker 가 한다.
+  scheduler:
+    <<: *app
+    command: ["crawler", "scheduler"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_signal: SIGINT
+    mem_limit: 256m
+
   # 서버에서만 켠다(COMPOSE_PROFILES=proxy). 로컬에서는 localhost:8000 으로 바로 붙는다.
   caddy:
     image: caddy:2-alpine
