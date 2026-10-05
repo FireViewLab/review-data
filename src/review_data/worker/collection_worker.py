@@ -268,7 +268,8 @@ async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collec
                     "[%s/%s] 리뷰 수집 실패: %s", claim.platform, claim.product_id, exc
                 )
     except Exception as exc:  # noqa: BLE001 - job 을 실패로 남기고 워커는 계속 돈다
-        collected.errors.append(f"unexpected: {exc}")
+        # 메시지가 비어 있는 예외(타임아웃 등)도 있어서 종류를 함께 남긴다.
+        collected.errors.append(f"unexpected: {type(exc).__name__}: {exc}")
         logger.exception(
             "[%s/%s] collector 실행 중 예상치 못한 오류", claim.platform, claim.product_id
         )

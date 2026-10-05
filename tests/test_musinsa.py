@@ -57,6 +57,10 @@ def test_review_maps_fields():
     assert (review.option, review.helpful_count, review.author) == ("M", 3, "작성자")
 
 
+def test_review_with_null_images():
+    assert _parse_review({**REVIEW_ITEM, "images": None}, "7217502").images == []
+
+
 def test_review_without_content_is_skipped():
     # 별점만 남긴 리뷰가 하나 있다고 상품의 리뷰 수집 전체가 실패하면 안 된다.
     assert _parse_review({**REVIEW_ITEM, "content": "  "}, "7217502") is None

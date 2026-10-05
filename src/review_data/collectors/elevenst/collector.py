@@ -178,6 +178,10 @@ class ElevenstCollector(BaseCollector):
 
         content_el = element.select_one(".cont_review_hide")
         content = content_el.get_text(" ", strip=True) if content_el else ""
+        # 내용 없이 별점만 남긴 리뷰는 표준 모델이 받지 않는다. 한 건 때문에 상품의 리뷰
+        # 수집 전체가 실패하지 않도록 건너뛴다.
+        if not content:
+            return None
 
         author_el = element.select_one(".c_product_reviewer")
         author = author_el.get_text(strip=True) if author_el else None
