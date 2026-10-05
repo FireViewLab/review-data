@@ -21,7 +21,8 @@ from review_data.core.db.base import create_engine, create_session_factory, sess
 from review_data.core.db.repository import ProductRepository, ReviewRepository
 from review_data.core.discovery import discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
-from review_data.core.settings import ENV_FILE, env_file_exists
+from review_data.core.service.scheduling import SchedulingService
+from review_data.core.settings import ENV_FILE, env_file_exists, get_settings
 from review_data.worker import collection_worker
 
 app = typer.Typer(help="커머스 리뷰 수집 도구", no_args_is_help=True)
@@ -214,6 +215,56 @@ async def _run_worker(once: bool, poll_interval: float) -> None:
         await collection_worker.run_forever(
             session_factory, worker_id, poll_interval=poll_interval
         )
+    finally:
+        await engine.dispose()
+
+
+@app.command()
+def scheduler(
+    once: bool = typer.Option(False, "--once", help="한 번만 예약하고 종료합니다"),
+    interval: float | None = typer.Option(
+        None,
+        "--interval",
+        min=1.0,
+        help="예약 주기(초). 비우면 SCHEDULE_INTERVAL_SECONDS 를 씁니다",
+    ),
+) -> None:
+    """낡은 상품을 찾아 수집 job 을 주기적으로 예약합니다.
+
+    조회가 없어도 DB 에 있는 상품을 다시 수집하게 합니다. 실제 크롤링은 워커가 하므로
+    `crawler worker` 가 함께 떠 있어야 합니다.
+    """
+    _require_env()
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
+    try:
+        asyncio.run(_run_scheduler(once, interval))
+    except KeyboardInterrupt:
+        typer.echo("\n스케줄러를 종료합니다.")
+
+
+async def _run_scheduler(once: bool, interval: float | None) -> None:
+    logger = logging.getLogger("review_data.scheduler")
+    wait = interval if interval is not None else get_settings().schedule_interval_seconds
+    engine = create_engine()
+    session_factory = create_session_factory(engine)
+    try:
+        while True:
+            try:
+                async with session_factory() as session:
+                    result = await SchedulingService(session).run_once()
+                    await session.commit()
+                logger.info(
+                    "예약 %d건 (예약 전 대기 %d건)", result.created, result.pending_before
+                )
+            except Exception:  # noqa: BLE001 - DB 가 잠깐 끊겨도 다음 주기에 다시 시도한다
+                if once:
+                    raise
+                logger.exception("예약 중 오류. 다음 주기에 다시 시도합니다.")
+            if once:
+                return
+            await asyncio.sleep(wait)
     finally:
         await engine.dispose()
 

@@ -14,6 +14,7 @@ import 만으로 .env 를 강제하거나 종료해버리면 호스트 앱이 �
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # src/review_data/core/settings.py -> 프로젝트 루트
@@ -55,6 +56,21 @@ class Settings(BaseSettings):
     # 브라우저는 페이지 렌더링까지 기다려야 해서 더 넉넉히 준다.
     collect_timeout_seconds: float = 120.0
     browser_collect_timeout_seconds: float = 300.0
+
+    # ── 스케줄러 ───────────────────────────
+    # 낡은 상품을 찾아 수집 job 을 예약하는 주기(초).
+    # 0 이하면 쉬지 않고 DB 를 조회하게 되므로 막는다.
+    schedule_interval_seconds: float = Field(default=300.0, gt=0)
+    # 대기 중인 job 이 이만큼 쌓여 있으면 스케줄러는 더 예약하지 않는다. 워커가 소화하는
+    # 속도보다 빨리 쌓이면 큐만 길어지고, 조회로 들어온 급한 job 이 뒤로 밀린다.
+    # 조회 API 가 만드는 job 은 이 상한과 무관하게 항상 만들어진다. 0 이면 예약을 멈춘다.
+    schedule_max_pending: int = Field(default=20, ge=0)
+    # 수집이 실패한 상품을 다시 예약하기까지 기다리는 시간(초). 차단된 플랫폼을
+    # 주기마다 다시 두드리지 않기 위한 것이다.
+    schedule_failure_cooldown_seconds: int = Field(default=6 * 60 * 60, ge=0)
+    # 스케줄러가 건드리지 않을 플랫폼(쉼표 구분). 플랫폼 전체가 차단돼 있으면 상품별
+    # 대기만으로는 상품 수만큼 요청이 반복되므로 여기서 통째로 뺀다. 예: "gmarket,auction"
+    schedule_excluded_platforms: str = ""
 
     # ── 플랫폼별 인증 정보 ──────────────────
     # 자기 플랫폼에 키가 필요하면 여기에 추가하고,

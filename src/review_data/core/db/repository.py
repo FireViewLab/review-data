@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -213,8 +213,70 @@ class CollectionJobRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def count_pending(self) -> int:
+        """아직 워커가 집지 않은 job 수. 스케줄러가 큐를 넘치게 하지 않으려고 본다."""
+        stmt = select(func.count()).select_from(CollectionJob).where(
+            CollectionJob.status == "pending"
+        )
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def list_refresh_candidates(
+        self,
+        *,
+        product_cutoff: datetime,
+        review_cutoff: datetime,
+        failure_cutoff: datetime,
+        limit: int,
+        excluded_platforms: tuple[str, ...] = (),
+    ) -> list[tuple[str, str]]:
+        """다시 수집할 상품을 오래된 순으로 고른다.
+
+        낡았는지는 조회 API(CollectionService._is_fresh)와 같은 기준으로 본다. 기준이
+        다르면 스케줄러가 돌았는데도 조회 때 stale 로 나온다.
+
+        최근에 실패한 상품은 failure_cutoff 이후로 다시 예약하지 않는다. 차단된 플랫폼의
+        상품이 주기마다 예약되어 같은 사이트를 계속 두드리는 것을 막는다.
+        """
+        same_product = and_(
+            CollectionJob.platform == ProductRow.platform,
+            CollectionJob.product_id == ProductRow.product_id,
+        )
+        has_active_job = exists().where(
+            same_product, CollectionJob.status.in_(("pending", "running"))
+        )
+        failed_recently = exists().where(
+            same_product,
+            CollectionJob.status.in_(("failed", "partial")),
+            # 완료 시각이 비어 있는 실패 이력(수동 정리 등)이 대기를 건너뛰지 않게 한다.
+            func.coalesce(CollectionJob.completed_at, CollectionJob.updated_at) > failure_cutoff,
+        )
+        stmt = (
+            select(ProductRow.platform, ProductRow.product_id)
+            .where(
+                # 조회 API 는 "지난 시간 < TTL" 일 때만 신선하다고 본다. 정확히 TTL 인
+                # 상품도 낡은 것이므로 <= 로 맞춘다.
+                or_(
+                    ProductRow.last_collected_at <= product_cutoff,
+                    ProductRow.reviews_last_collected_at.is_(None),
+                    ProductRow.reviews_last_collected_at <= review_cutoff,
+                ),
+                ProductRow.platform.not_in(excluded_platforms),
+                ~has_active_job,
+                ~failed_recently,
+            )
+            # 리뷰를 한 번도 못 받은 상품이 가장 불완전하므로 먼저 채운다.
+            .order_by(
+                ProductRow.reviews_last_collected_at.asc().nulls_first(),
+                ProductRow.last_collected_at.asc(),
+                ProductRow.platform,
+                ProductRow.product_id,
+            )
+            .limit(limit)
+        )
+        return [(row.platform, row.product_id) for row in await self.session.execute(stmt)]
+
     async def create_or_get_active(
-        self, platform: str, product_id: str
+        self, platform: str, product_id: str, *, requested_by: str | None = None
     ) -> tuple[CollectionJob, bool]:
         """활성 job이 있으면 그걸 반환(created=False), 없으면 새로 만든다(created=True).
 
@@ -228,6 +290,7 @@ class CollectionJobRepository:
                     platform=platform,
                     product_id=product_id,
                     idempotency_key=idempotency_key,
+                    requested_by=requested_by,
                 )
                 self.session.add(job)
                 await self.session.flush()
