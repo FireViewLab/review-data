@@ -66,6 +66,8 @@ crawler worker                            # 수집 job 을 처리하는 워커 (
 crawler worker --once                     # job 하나만 처리하고 종료
 crawler scheduler                         # 낡은 상품을 주기적으로 다시 예약 (워커와 함께 실행)
 crawler scheduler --once                  # 한 번만 예약하고 종료
+crawler seed                              # 기본 키워드 상품 저장·직접 지정 상품 예약
+crawler seed --dry-run                    # 요청·저장 없이 실행 계획 확인
 crawler serve                             # API 서버 (localhost:8000/docs)
 ```
 
@@ -112,6 +114,7 @@ Python·Chromium·Postgres 를 따로 설치하지 않고 한 번에 띄웁니�
 ```bash
 cp .env.example .env
 docker compose up --build       # Postgres → 마이그레이션 → API + 워커
+docker compose run --rm worker crawler seed  # 기본 수집 대상 넣기
 docker compose logs -f worker   # 수집 진행 상황
 docker compose down             # 종료 (데이터는 볼륨에 남음, 지우려면 -v)
 ```

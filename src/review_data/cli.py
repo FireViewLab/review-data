@@ -12,6 +12,8 @@ import asyncio
 import logging
 import os
 import socket
+from pathlib import Path
+from typing import Annotated
 
 import questionary
 import typer
@@ -22,6 +24,7 @@ from review_data.core.db.repository import ProductRepository, ReviewRepository
 from review_data.core.discovery import discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.service.scheduling import SchedulingService
+from review_data.core.service.seeding import SeedingService, load_seed_file
 from review_data.core.settings import ENV_FILE, env_file_exists, get_settings
 from review_data.worker import collection_worker
 
@@ -215,6 +218,53 @@ async def _run_worker(once: bool, poll_interval: float) -> None:
         await collection_worker.run_forever(
             session_factory, worker_id, poll_interval=poll_interval
         )
+    finally:
+        await engine.dispose()
+
+
+@app.command()
+def seed(
+    file: Annotated[Path, typer.Option("--file", help="기본 수집 대상 TOML 파일")] = Path(
+        "seeds.toml"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="요청·저장 없이 실행 계획만 출력합니다"),
+) -> None:
+    """조회가 없는 빈 서버에도 상품과 수집 대상을 마련합니다."""
+    _require_env()
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
+    try:
+        asyncio.run(_run_seed(file, dry_run))
+    except (OSError, ValueError) as exc:
+        typer.echo(f"시드 파일 오류: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        typer.echo("\n시드를 종료합니다.")
+
+
+async def _run_seed(file: Path, dry_run: bool) -> None:
+    registry = _load_registry()
+    plan = load_seed_file(file, registry)
+    engine = create_engine()
+    session_factory = create_session_factory(engine)
+    try:
+        results = await SeedingService(registry, session_factory).run(plan, dry_run=dry_run)
+        for platform, result in results.items():
+            if result.skipped:
+                typer.echo(f"[{platform}] 제외 플랫폼: 건너뜀")
+                continue
+            if dry_run:
+                for keyword in plan.keywords.get(platform, ()):
+                    typer.echo(f"[{platform}] 검색 예정: {keyword} (최대 {plan.per_keyword}개)")
+                for product_id in plan.products.get(platform, ()):
+                    typer.echo(f"[{platform}] 예약 예정: {product_id}")
+            typer.echo(
+                f"[{platform}] 저장 {result.saved}건, 예약 {result.created}건, "
+                f"실패 {len(result.errors)}건"
+            )
+            for error in result.errors:
+                typer.echo(f"  {error}")
     finally:
         await engine.dispose()
 

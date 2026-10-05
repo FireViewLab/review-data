@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     naver_client_id: str | None = None
     naver_client_secret: str | None = None
 
+    def excluded_platforms(self) -> tuple[str, ...]:
+        """예약과 시드가 같은 제외 목록을 써 차단 플랫폼을 다시 넣지 않게 한다."""
+        return tuple(
+            name.strip() for name in self.schedule_excluded_platforms.split(",") if name.strip()
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:
