@@ -115,6 +115,14 @@ class BaseCollector(ABC):
         raise NotSupportedError(f"{self.platform}: 리뷰 수집을 지원하지 않습니다.")
 
     # ── 선택 구현 ────────────────────────────────────
+    async def related_products(self, product_id: str, limit: int = 20) -> list[str]:
+        """같은 판매처의 다른 상품 ID 를 돌려줍니다 (시드를 넓힐 때 사용).
+
+        검색 수단이 없는 플랫폼은 상품 하나를 알아야 다른 상품을 찾을 수 있습니다.
+        그런 플랫폼만 구현하면 됩니다.
+        """
+        raise NotSupportedError(f"{self.platform}: 관련 상품 조회를 지원하지 않습니다.")
+
     async def iter_reviews(
         self, product_id: str, limit: int = 50
     ) -> AsyncIterator[Review]:

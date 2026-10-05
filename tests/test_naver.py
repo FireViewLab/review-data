@@ -10,6 +10,7 @@ from review_data.collectors.naver.collector import (
     is_blocked,
     parse_product,
     parse_product_id,
+    parse_related,
     parse_reviews,
 )
 from review_data.core.discovery import discover
@@ -155,3 +156,39 @@ def test_headless_override_does_not_touch_given_settings():
 
     assert collector.settings.headless is False
     assert given.headless is True
+
+
+def test_parse_related_keeps_only_same_store_products_on_sale():
+    data = _load("related.json")
+
+    related = parse_related(
+        [data["simple_products"], data["other_recommend"]],
+        channel_uid="2sWDwlB4wqRisSBxpyXQW",
+        store="zinus",
+        exclude_product_no="6000252751",
+        limit=20,
+    )
+
+    # 방문한 상품 자신, 다른 스토어 상품, 판매 중지 상품, 중복은 빠진다.
+    assert related == [
+        "zinus:9524657101",
+        "zinus:11887628580",
+        "zinus:8435643749",
+        "zinus:3744162440",
+        "zinus:6000123816",
+        "zinus:3744166541",
+    ]
+
+
+def test_parse_related_respects_limit():
+    data = _load("related.json")
+
+    related = parse_related(
+        [data["simple_products"]],
+        channel_uid="2sWDwlB4wqRisSBxpyXQW",
+        store="zinus",
+        exclude_product_no="6000252751",
+        limit=2,
+    )
+
+    assert related == ["zinus:9524657101", "zinus:11887628580"]

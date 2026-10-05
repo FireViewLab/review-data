@@ -32,10 +32,14 @@ PRODUCT_URL_PATTERN = re.compile(
 )
 REVIEW_PAGE_PATH = "/contents/reviews/query-pages"
 REVIEW_TAB_TEXT = re.compile(r"^리뷰\s*[\d,]+$")
+# 상품 페이지가 스스로 받아 오는 "같은 스토어의 다른 상품" 목록들.
+RELATED_PATHS = ("/simple-products", "/recommends/keep-cart", "/product-other-recommend/")
+RELATED_SCROLL_STEPS = 6
 
 BLOCKED_STATUSES = {418, 429, 490}
 BLOCK_MARKERS = ("captcha", "보안 확인", "접속이 일시적으로 제한")
 RESPONSE_TIMEOUT_SECONDS = 15.0
+REVIEW_TAB_TIMEOUT_MS = 10_000
 
 
 def parse_product_id(product_id: str) -> tuple[str, str]:
@@ -149,12 +153,46 @@ def parse_reviews(data: dict, product_id: str, limit: int) -> list[Review]:
     return reviews
 
 
+def parse_related(
+    payloads: list[Any], *, channel_uid: str, store: str, exclude_product_no: str, limit: int
+) -> list[str]:
+    """추천·인기 상품 응답들에서 같은 스토어의 판매 중인 상품 식별자를 뽑는다.
+
+    목록 항목에는 스토어 이름이 없고 스토어 고유 ID(channelUid)만 있다. 방문한 상품과
+    ID 가 같은 것만 골라야 식별자({스토어}:{상품번호})를 만들 수 있다.
+    """
+    found: dict[str, None] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            channel = node.get("channel")
+            product_no = node.get("id")
+            if (
+                isinstance(channel, dict)
+                and channel.get("channelUid") == channel_uid
+                and product_no is not None
+                and str(product_no) != exclude_product_no
+                and node.get("productStatusType", "SALE") == "SALE"
+            ):
+                found.setdefault(f"{store}:{product_no}")
+            for value in node.values():
+                walk(value)
+
+    for payload in payloads:
+        walk(payload)
+    return list(found)[:limit]
+
+
 @dataclass
 class _PageCapture:
     """상품 페이지 한 번 방문에서 받은 응답들."""
 
     product: dict | None = None
     reviews: dict | None = None
+    related: list[Any] = field(default_factory=list)
     product_ready: asyncio.Event = field(default_factory=asyncio.Event)
     reviews_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -195,9 +233,30 @@ class NaverCollector(BrowserCollector):
             raise ParseError(f"[naver] 리뷰 목록을 받지 못했습니다: {product_id}")
         return parse_reviews(capture.reviews, product_id, limit)
 
-    async def _visit(self, product_id: str) -> _PageCapture:
-        if product_id in self._captures:
-            return self._captures[product_id]
+    async def related_products(self, product_id: str, limit: int = 20) -> list[str]:
+        if limit <= 0:
+            return []
+        capture = await self._visit(product_id, with_related=True)
+        if capture.product is None:
+            raise ParseError(f"[naver] 상품 정보를 받지 못했습니다: {product_id}")
+        store, product_no = parse_product_id(product_id)
+        channel_uid = (capture.product.get("channel") or {}).get("channelUid")
+        if not channel_uid:
+            raise ParseError(f"[naver] 스토어 정보를 찾지 못했습니다: {product_id}")
+        return parse_related(
+            capture.related,
+            channel_uid=channel_uid,
+            store=store,
+            exclude_product_no=product_no,
+            limit=limit,
+        )
+
+    async def _visit(self, product_id: str, *, with_related: bool = False) -> _PageCapture:
+        cached = self._captures.get(product_id)
+        # 관련 상품 목록은 화면을 내려야 요청된다. 평소 수집에서는 내리지 않으므로,
+        # 관련 상품이 필요한데 받아 둔 게 없으면 다시 방문한다.
+        if cached is not None and (cached.related or not with_related):
+            return cached
 
         store, product_no = parse_product_id(product_id)
         url = PRODUCT_URL.format(store=store, product_no=product_no)
@@ -213,6 +272,8 @@ class NaverCollector(BrowserCollector):
             elif capture.reviews is None and response.url.endswith(REVIEW_PAGE_PATH):
                 capture.reviews = await response.json()
                 capture.reviews_ready.set()
+            elif any(path in response.url for path in RELATED_PATHS):
+                capture.related.append(await response.json())
 
         async with self.page() as page:
             page.on("response", on_response)
@@ -225,6 +286,10 @@ class NaverCollector(BrowserCollector):
                 await asyncio.wait_for(capture.reviews_ready.wait(), RESPONSE_TIMEOUT_SECONDS)
             except TimeoutError:
                 pass
+            if with_related:
+                for _ in range(RELATED_SCROLL_STEPS):
+                    await page.mouse.wheel(0, 1000)
+                    await page.wait_for_timeout(900)
 
         self._captures[product_id] = capture
         return capture
@@ -245,9 +310,14 @@ class NaverCollector(BrowserCollector):
             raise ParseError(f"[naver] 페이지 요청 실패: HTTP {status} ({url})")
 
     async def _open_review_tab(self, page: Page) -> None:
-        tab = page.get_by_text(REVIEW_TAB_TEXT).first
-        if not await tab.count():
-            return
+        # 같은 글자의 탭이 숨겨진 고정 헤더에도 있다. 숨겨진 쪽을 누르면 아무 일도 일어나지
+        # 않으므로 화면에 보이는 것만 고른다.
+        tab = page.get_by_text(REVIEW_TAB_TEXT).locator("visible=true").first
+        # 탭은 상품 정보보다 늦게 그려진다. 바로 찾으면 아직 없어서 리뷰를 통째로 놓친다.
+        try:
+            await tab.wait_for(state="visible", timeout=REVIEW_TAB_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            return  # 리뷰가 없는 상품은 탭에 개수가 붙지 않는다.
         await tab.scroll_into_view_if_needed()
         # 탭 위에 고정 헤더가 겹쳐 일반 클릭이 막힌다. 사람이 누르는 것과 같은 클릭 이벤트다.
         await tab.click(force=True)

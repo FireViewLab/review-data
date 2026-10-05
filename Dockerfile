@@ -22,6 +22,7 @@ RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml
     && apt-get update && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+COPY seeds.toml ./seeds.toml
 COPY src ./src
 RUN pip install --no-deps .
 

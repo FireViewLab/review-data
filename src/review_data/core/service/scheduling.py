@@ -48,7 +48,7 @@ class SchedulingService:
             failure_cutoff=now
             - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
             limit=room,
-            excluded_platforms=self._excluded_platforms(),
+            excluded_platforms=self.settings.excluded_platforms(),
         )
         created = 0
         for platform, product_id in candidates:
@@ -59,7 +59,3 @@ class SchedulingService:
             )
             created += was_created
         return ScheduleResult(pending_before=pending, created=created)
-
-    def _excluded_platforms(self) -> tuple[str, ...]:
-        raw = self.settings.schedule_excluded_platforms
-        return tuple(name.strip() for name in raw.split(",") if name.strip())
