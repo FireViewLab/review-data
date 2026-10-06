@@ -8,7 +8,11 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from review_data.collectors.auction.collector import _BLOCKED_MARKER, AuctionCollector
+from review_data.collectors.auction.collector import (
+    _BLOCKED_MARKER,
+    AuctionCollector,
+    _is_blocked_page,
+)
 from review_data.core.exceptions import ParseError
 from review_data.core.settings import Settings
 
@@ -104,6 +108,84 @@ async def test_normal_page_keeps_existing_flow(collector_page, method, has_respo
         assert result[0].product_id == "123"
         assert result[0].name == "텀블러"
         page.evaluate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("method", ["search_products", "get_product", "get_reviews"])
+@pytest.mark.parametrize(
+    "name", ["Just a Moment 앨범", "보안 문자를 입력해주세요 안내서", "CAPTCHA"]
+)
+async def test_product_titles_and_security_notices_are_not_block_pages(
+    collector_page, method, name
+):
+    collector, page, closed = collector_page
+    # 검색과 상세의 정상 콘텐츠 신호를 각각 독립적으로 검증한다.
+    if method == "search_products":
+        content = f"""
+            <div class="section--itemcard">
+              <div class="area--itemcard_title"><a href="https://itempage3.auction.co.kr/DetailView.aspx?itemno=123">{name}</a></div>
+              <span class="text--title">{name}</span>
+            </div>
+        """
+    else:
+        content = f'<h1 class="itemtit">{name}</h1>'
+    page.content.return_value = f"""
+        <title>{name} - 옥션</title><h1>{name}</h1><h2>{name}</h2>
+        <h2>보안 문자를 입력해주세요</h2>{content}
+    """
+
+    result = await getattr(collector, method)("123")
+
+    page.wait_for_selector.assert_awaited_once()
+    closed.assert_awaited_once()
+    if method == "get_reviews":
+        assert result == []
+        page.evaluate.assert_awaited_once()
+    elif method == "get_product":
+        assert result.name == name
+    else:
+        assert result[0].name == name
+
+
+@pytest.mark.parametrize("tag", ["title", "h1", "h2"])
+@pytest.mark.parametrize(
+    "text", ["Just a Moment 앨범", "보안 문자를 입력해주세요 안내서", "Verify you are human 포스터"]
+)
+def test_block_phrases_inside_titles_are_not_enough_without_product_signals(tag, text):
+    assert not _is_blocked_page(f"<{tag}>{text}</{tag}>")
+
+
+@pytest.mark.parametrize("method", ["search_products", "get_product", "get_reviews"])
+@pytest.mark.parametrize(
+    "status, block",
+    [
+        (403, ""),
+        (200, "<title>Just a moment...</title>"),
+        (200, '<form id="challenge-form"></form>'),
+    ],
+)
+async def test_explicit_blocks_override_remaining_product_content(
+    collector_page, method, status, block
+):
+    collector, page, closed = collector_page
+    page.goto.return_value = SimpleNamespace(status=status)
+    page.content.return_value = (
+        block
+        + """
+        <h1 class="itemtit">Just a Moment 앨범</h1>
+        <div class="section--itemcard">
+          <div class="area--itemcard_title"><a href="?itemno=123">앨범</a></div>
+        </div>
+    """
+    )
+
+    with pytest.raises(ParseError, match="HTTP 403|Cloudflare/CAPTCHA"):
+        await getattr(collector, method)("123")
+
+    page.wait_for_selector.assert_not_awaited()
+    page.evaluate.assert_not_awaited()
+    page.goto.assert_awaited_once()
+    collector.polite_wait.assert_not_awaited()
+    closed.assert_awaited_once()
 
 
 @pytest.mark.parametrize("method", ["search_products", "get_product", "get_reviews"])

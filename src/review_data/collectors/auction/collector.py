@@ -93,20 +93,39 @@ def _is_blocked_page(html: str) -> bool:
         "form[action*='/cdn-cgi/challenge-platform/']"
     ):
         return True
-    markers = (
+    notices = {
         "just a moment",
         "잠시만 기다리십시오",
         "attention required! | cloudflare",
         "verify you are human",
+        "verify that you are human",
         "로봇이 아님을 확인",
+        "로봇이 아님을 확인해주세요",
+        "로봇이 아님을 확인하세요",
         "보안 문자를 입력",
-    )
-    return any(
-        any(marker in text for marker in markers)
-        or text in {"captcha", "captcha verification", "captcha challenge"}
-        for heading in soup.select("title, h1, h2")
-        for text in [heading.get_text(" ", strip=True).lower()]
-    )
+        "보안 문자를 입력해주세요",
+        "보안 문자를 입력하세요",
+        "captcha",
+        "captcha verification",
+        "captcha challenge",
+    }
+
+    def is_block_notice(element) -> bool:
+        text = " ".join(element.get_text(" ", strip=True).lower().split())
+        return text.rstrip(" .!…。") in notices
+
+    # 명확한 차단 페이지 제목은 정상 콘텐츠가 남아 있어도 차단으로 취급한다.
+    if any(is_block_notice(title) for title in soup.select("title")):
+        return True
+    # 상품명과 검색 카드가 있으면 일반 heading의 보안 안내는 차단 근거가 아니다.
+    if any(
+        element.get_text(strip=True)
+        for element in soup.select(
+            "h1.itemtit, div.section--itemcard .area--itemcard_title a[href*='itemno=']"
+        )
+    ):
+        return False
+    return any(is_block_notice(heading) for heading in soup.select("h1, h2"))
 
 
 async def _wait_for_real_page(
