@@ -63,21 +63,33 @@ class BaseCollector(ABC):
 
     # ── 리소스 생명주기 (팀원이 신경 쓸 필요 없음) ──────────
     async def __aenter__(self) -> Self:
+        if self._client is not None:
+            raise RuntimeError(f"[{self.platform}] collector 는 이미 사용 중입니다.")
         self._client = httpx.AsyncClient(
             headers=DEFAULT_HEADERS,
             timeout=self.settings.request_timeout,
             follow_redirects=True,
         )
-        await self.setup()
+        try:
+            await self.setup()
+        except BaseException as exc:
+            # __aenter__ 실패 시 Python 은 __aexit__ 을 호출하지 않는다.
+            await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         try:
-            await self.teardown()
-        finally:
-            if self._client is not None:
-                await self._client.aclose()
-                self._client = None
+            try:
+                await self.teardown()
+            finally:
+                client, self._client = self._client, None
+                if client is not None:
+                    await client.aclose()
+        except Exception:
+            # 정리 오류 때문에 수집 오류나 취소의 원인이 사라지지 않게 한다.
+            if not exc_info or exc_info[0] is None:
+                raise
 
     async def setup(self) -> None:  # noqa: B027 - 선택적 리소스 훅
         """추가 준비가 필요하면 오버라이드하세요 (선택)."""
