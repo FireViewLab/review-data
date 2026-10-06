@@ -7,6 +7,7 @@ PostgreSQL 테이블 정의 (ORM).
 """
 
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     ARRAY,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     PrimaryKeyConstraint,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -168,6 +170,7 @@ class AnalysisJob(Base):
 
     __tablename__ = "analysis_jobs"
     __table_args__ = (
+        UniqueConstraint("id", "platform", "product_id", name="uq_analysis_jobs_identity"),
         CheckConstraint(
             "status IN ('queued','running','done','failed','stale')",
             name="ck_analysis_jobs_status",
@@ -209,3 +212,46 @@ class AnalysisJob(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ReviewAnalysisRow(Base):
+    """리뷰별 AI 결과. 분석 실행마다 보존하며 근거 부족은 NULL로 저장한다."""
+
+    __tablename__ = "review_analyses"
+    __table_args__ = (
+        PrimaryKeyConstraint("analysis_job_id", "review_id"),
+        ForeignKeyConstraint(
+            ["analysis_job_id", "platform", "product_id"],
+            ["analysis_jobs.id", "analysis_jobs.platform", "analysis_jobs.product_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["platform", "product_id", "review_id"],
+            ["reviews.platform", "reviews.product_id", "reviews.review_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("rti BETWEEN 0 AND 100", name="ck_review_analyses_rti"),
+        CheckConstraint("level IN ('safe','warn','danger')", name="ck_review_analyses_level"),
+        CheckConstraint("array_position(reasons, NULL) IS NULL", name="ck_review_analyses_reasons"),
+        Index(
+            "idx_review_analyses_review",
+            "platform",
+            "product_id",
+            "review_id",
+            "analysis_job_id",
+        ),
+    )
+
+    analysis_job_id: Mapped[int] = mapped_column(BigInteger)
+    platform: Mapped[str] = mapped_column(Text)
+    product_id: Mapped[str] = mapped_column(Text)
+    review_id: Mapped[str] = mapped_column(Text)
+    rti: Mapped[Decimal | None] = mapped_column(Numeric)
+    level: Mapped[str | None] = mapped_column(Text)
+    text_score: Mapped[Decimal | None] = mapped_column(Numeric)
+    behavior_score: Mapped[Decimal | None] = mapped_column(Numeric)
+    network_score: Mapped[Decimal | None] = mapped_column(Numeric)
+    reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    model_version: Mapped[str | None] = mapped_column(Text)
+    input_hash: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
