@@ -44,13 +44,20 @@ services:
 
   api:
     <<: *app
+    # 직접 수집 API도 화면 모드 collector를 사용하므로 가상 화면을 함께 실행한다.
+    command: ["sh", "-c", "Xvfb :99 -screen 0 1280x800x24 -nolisten tcp & exec uvicorn review_data.api.app:app --host 0.0.0.0 --port 8000"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/review_data
+      HEADLESS: "true"
+      DISPLAY: ":99"
     # 외부에는 Caddy(443)로만 연다. 127.0.0.1 에만 묶어 방화벽 설정과 무관하게 8000 은 서버 안에서만 보인다.
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
-    mem_limit: 512m
+    shm_size: 1gb
+    mem_limit: 1g
 
   worker:
     <<: *app

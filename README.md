@@ -19,16 +19,22 @@
 
 | 담당자 | 플랫폼 | 폴더 | 상태 |
 |---|---|---|---|
-| 김동환 | 에이블리 | `collectors/ably` | 구현됨 |
+| 김동환 | 에이블리 | `collectors/ably` | 구현됨 · 검색에 네이버 웹 검색 API 키 필요 |
 | 김동환 | 오늘의집 | `collectors/ohouse` | 구현됨 |
 | 김하연 | 마켓컬리 | `collectors/kurly` | 구현됨 |
-| 김하연 | G마켓 | `collectors/gmarket` | **미구현** |
-| 남정현 | 옥션 | `collectors/auction` | 구현됨 |
+| 김하연 | G마켓 | `collectors/gmarket` | 구현됨 · Cloudflare 차단 시 수집 불가 |
+| 남정현 | 옥션 | `collectors/auction` | 구현됨 · Cloudflare 차단 시 수집 불가 |
 | 남정현 | 무신사 | `collectors/musinsa` | 구현됨 |
 | 정빈 | 11번가 | `collectors/elevenst` | 구현됨 |
 | 정빈 | 올리브영 | `collectors/oliveyoung` | 구현됨 |
+| 정빈 | 네이버 | `collectors/naver` | 브랜드스토어 상품·리뷰 구현됨 · 검색 미지원 |
 
 구현 여부는 `crawler list` 로 확인할 수 있습니다. `collector.py` 가 비어 있으면 '아직 작업 전' 으로 보고 조용히 건너뜁니다.
+
+에이블리 검색은 자체 검색 페이지가 차단돼 네이버 웹 검색의 에이블리 상품 색인을 사용합니다.
+`NAVER_CLIENT_ID`와 `NAVER_CLIENT_SECRET`이 필요하며, 결과와 순위는 에이블리 자체 검색과
+다릅니다. 상품 상세와 공개 요약 리뷰는 에이블리 페이지에서 수집합니다.
+캡차나 플랫폼의 접근 차단이 확인되면 우회하지 않고 수집 오류로 반환합니다.
 
 ## 시작하기
 

@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 from bs4 import BeautifulSoup
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from review_data.core.browser import BrowserCollector
@@ -85,19 +85,45 @@ def _brand_text(scope: BeautifulSoup) -> str | None:
     return text or None
 
 
-async def _wait_for_real_page(page: Page, selector: str, platform: str) -> None:
-    """실제 콘텐츠가 뜰 때까지 기다린다.
+def _is_blocked_page(html: str) -> bool:
+    soup = BeautifulSoup(html, "lxml")
+    # 일반 상품 설명이나 스크립트의 Cloudflare/CAPTCHA 언급은 차단 근거가 아니다.
+    if soup.select_one(
+        "form#challenge-form, form#challengeform, #cf-challenge-running, "
+        "form[action*='/cdn-cgi/challenge-platform/']"
+    ):
+        return True
+    markers = (
+        "just a moment",
+        "잠시만 기다리십시오",
+        "attention required! | cloudflare",
+        "verify you are human",
+        "로봇이 아님을 확인",
+        "보안 문자를 입력",
+    )
+    return any(
+        any(marker in text for marker in markers)
+        or text in {"captcha", "captcha verification", "captcha challenge"}
+        for heading in soup.select("title, h1, h2")
+        for text in [heading.get_text(" ", strip=True).lower()]
+    )
 
-    Cloudflare 가 자동화 브라우저로 감지해 챌린지 화면("잠시만 기다리십시오")에
-    묶어두면 이 셀렉터가 끝내 나타나지 않아 타임아웃이 발생한다. 이 경우를
-    구분 가능한 메시지로 바꿔서, 원인을 모른 채 raw TimeoutError 만 보는 일을 막는다.
-    """
+
+async def _wait_for_real_page(
+    page: Page, selector: str, platform: str, response: Response | None = None
+) -> None:
+    """확인된 차단은 즉시 실패하고, 정상 페이지에서만 콘텐츠를 기다린다."""
+    if response is not None and response.status == 403:
+        raise ParseError(f"{platform}: 페이지 접근이 차단되었습니다 (HTTP 403).")
+    if _is_blocked_page(await page.content()):
+        raise ParseError(
+            f"{platform}: 페이지 접근이 차단되었습니다 (Cloudflare/CAPTCHA 차단 화면)."
+        )
     try:
         await page.wait_for_selector(selector)
     except PlaywrightTimeoutError as exc:
         raise ParseError(
-            f"{platform}: 페이지 로딩이 차단된 것으로 보입니다 "
-            "(Cloudflare 자동화 감지 챌린지). 잠시 후 다시 시도해보세요."
+            f"{platform}: 페이지 콘텐츠를 찾지 못했습니다 (selector: {selector})."
         ) from exc
 
 
@@ -107,10 +133,10 @@ class AuctionCollector(BrowserCollector):
 
     async def search_products(self, keyword: str, limit: int = 20) -> list[Product]:
         async with self.page() as page:
-            await page.goto(
+            response = await page.goto(
                 f"{SEARCH_URL}?keyword={quote(keyword)}", wait_until="domcontentloaded"
             )
-            await _wait_for_real_page(page, "div.section--itemcard", self.platform)
+            await _wait_for_real_page(page, "div.section--itemcard", self.platform, response)
             content = await page.content()
 
         soup = BeautifulSoup(content, "lxml")
@@ -155,8 +181,8 @@ class AuctionCollector(BrowserCollector):
     async def get_product(self, product_id: str) -> Product:
         url = f"{DETAIL_URL}?itemno={product_id}"
         async with self.page() as page:
-            await page.goto(url, wait_until="domcontentloaded")
-            await _wait_for_real_page(page, "h1.itemtit", self.platform)
+            response = await page.goto(url, wait_until="domcontentloaded")
+            await _wait_for_real_page(page, "h1.itemtit", self.platform, response)
             content = await page.content()
 
         soup = BeautifulSoup(content, "lxml")
@@ -181,9 +207,7 @@ class AuctionCollector(BrowserCollector):
             price=_parse_int(price_el.get_text() if price_el else None),
             thumbnail_url=_fix_protocol(thumb_el["src"]) if thumb_el else None,
             category=category or None,
-            review_count=_parse_int(
-                review_count_el.get_text() if review_count_el else None
-            ),
+            review_count=_parse_int(review_count_el.get_text() if review_count_el else None),
             rating=_parse_float(rating_el.get_text() if rating_el else None),
         )
 
@@ -195,10 +219,10 @@ class AuctionCollector(BrowserCollector):
         max_pages = limit + 10
 
         async with self.page() as page:
-            await page.goto(
+            response = await page.goto(
                 f"{DETAIL_URL}?itemno={product_id}", wait_until="domcontentloaded"
             )
-            await _wait_for_real_page(page, "h1.itemtit", self.platform)
+            await _wait_for_real_page(page, "h1.itemtit", self.platform, response)
 
             for page_index in range(1, max_pages + 1):
                 if len(reviews) >= limit:
@@ -216,7 +240,7 @@ class AuctionCollector(BrowserCollector):
                     if _BLOCKED_MARKER in str(exc):
                         raise ParseError(
                             f"{self.platform}: 리뷰 API 접근이 차단된 것으로 보입니다 "
-                            "(Cloudflare 자동화 감지 챌린지). 잠시 후 다시 시도해보세요."
+                            "(HTTP 오류 또는 JSON이 아닌 응답)."
                         ) from exc
                     raise
                 page_reviews = _parse_review_page(raw_html, self.platform, product_id)
