@@ -25,6 +25,7 @@ class AnalysisStreamResult:
     results: list[dict]
     model_version: str | None = None
     policy_version: str | None = None
+    ai_job_id: str | None = None
 
 
 def _nonempty(value: object, field: str) -> str:
@@ -170,10 +171,27 @@ def _version(meta: dict, field: str, expected: str | None) -> str | None:
     return value
 
 
-def _same_job(data: dict, job_id: int) -> None:
-    value = data.get("analysis_job_id")
-    if type(value) is not int or value != job_id:
-        raise AnalysisStreamError("analysis_job_id does not match request")
+def _same_request(data: dict, job_id: int) -> None:
+    value = data.get("request_id")
+    if not isinstance(value, str) or value != str(job_id):
+        raise AnalysisStreamError("request_id does not match Data job")
+
+
+async def _in_progress(response: httpx.Response) -> bool:
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(body) + len(chunk) > 4096:
+            return False
+        body.extend(chunk)
+    try:
+        payload = json.loads(body, object_pairs_hook=_json_pairs)
+    except (ValueError, RecursionError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("detail"), dict)
+        and payload["detail"].get("code") == "IDEMPOTENCY_IN_PROGRESS"
+    )
 
 
 def _result(item: dict, ids: set[str]) -> dict:
@@ -256,11 +274,15 @@ class AnalysisStreamClient:
                     headers=headers,
                     json={"platform": platform, "product_id": product_id, "reviews": payload},
                 ) as response:
+                    if response.status_code == 409:
+                        raise AnalysisStreamError(
+                            "analysis HTTP status 409", retryable=await _in_progress(response)
+                        )
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]
                     if content_type.strip().lower() != "text/event-stream":
                         raise AnalysisStreamError("analysis response must be text/event-stream")
-                    return await self._consume(response, payload, job_id)
+                    return await self._consume(response, payload, job_id, platform, product_id)
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             raise AnalysisStreamError(
@@ -277,13 +299,15 @@ class AnalysisStreamClient:
         response: httpx.Response,
         payload: list[dict],
         job_id: int,
+        platform: str,
+        product_id: str,
     ) -> AnalysisStreamResult:
         ids = {item["review_id"] for item in payload}
         results = {}
         meta = None
         done = False
         first_frame = True
-        model_version = policy_version = None
+        model_version = policy_version = ai_job_id = None
         async for frame in _frames(response):
             if done:
                 raise AnalysisStreamError("frame received after done")
@@ -295,25 +319,43 @@ class AnalysisStreamClient:
             if meta is None:
                 if name != "meta":
                     raise AnalysisStreamError("first SSE event must be meta")
-                _same_job(data, job_id)
+                _same_request(data, job_id)
+                ai_job_id = _nonempty(data.get("ai_job_id"), "ai_job_id")
+                count = data.get("review_count")
+                if (
+                    data.get("platform") != platform
+                    or data.get("product_id") != product_id
+                    or type(count) is not int
+                    or count != len(ids)
+                    or data.get("contract_version") != "v0.5"
+                ):
+                    raise AnalysisStreamError("meta input or contract does not match request")
+                _nonempty(data.get("model_version"), "model_version")
+                _nonempty(data.get("policy_version"), "policy_version")
                 model_version = _version(data, "model_version", self.model_version)
                 policy_version = _version(data, "policy_version", self.policy_version)
                 meta = data
             elif name == "result":
+                _same_request(data, job_id)
                 result = _result(data, ids)
                 review_id = result["review_id"]
                 if review_id in results and results[review_id] != result:
                     raise AnalysisStreamError("conflicting duplicate result")
                 results[review_id] = result
             elif name == "done":
-                _same_job(data, job_id)
+                _same_request(data, job_id)
+                if data.get("ai_job_id") != ai_job_id:
+                    raise AnalysisStreamError("done AI job does not match meta")
                 count = data.get("result_count")
                 if type(count) is not int or count != len(ids) or len(results) != len(ids):
                     raise AnalysisStreamError("done count or results do not match request")
                 done = True
             elif name in {"heartbeat", "progress"}:
-                pass
+                _same_request(data, job_id)
             elif name == "error":
+                _same_request(data, job_id)
+                if data.get("ai_job_id") != ai_job_id:
+                    raise AnalysisStreamError("error AI job does not match meta")
                 retryable = data.get("retryable", False)
                 if type(retryable) is not bool:
                     raise AnalysisStreamError("error retryable must be boolean")
@@ -326,4 +368,5 @@ class AnalysisStreamClient:
             [results[item["review_id"]] for item in payload],
             model_version,
             policy_version,
+            ai_job_id,
         )

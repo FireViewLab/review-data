@@ -351,12 +351,25 @@ async def test_mock_http_stream_to_persisted_database(session_factory, monkeypat
         assert "x-analysis-job-id" not in request.headers
         assert request.headers["x-internal-token"] == "private-token"
         assert all("author" not in r for r in body["reviews"])
-        content = event("meta", {"analysis_job_id": job, "model_version": "v1"})
+        content = event(
+            "meta",
+            {
+                "request_id": str(job),
+                "ai_job_id": "ai-1",
+                "model_version": "v1",
+                "policy_version": "p1",
+                "platform": "kurly",
+                "product_id": "p",
+                "review_count": 2,
+                "contract_version": "v0.5",
+            },
+        )
         for r in body["reviews"]:
             result = results([r]).results[0]
             result["text_score"] = -1
+            result["request_id"] = str(job)
             content += event("result", result)
-        content += event("done", {"analysis_job_id": job, "result_count": 2})
+        content += event("done", {"request_id": str(job), "ai_job_id": "ai-1", "result_count": 2})
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
     monkeypatch.setattr(
@@ -370,6 +383,7 @@ async def test_mock_http_stream_to_persisted_database(session_factory, monkeypat
         status = await AnalysisRepository(s).status("kurly", "p", config())
         assert status["status"] == "done" and len(status["results"]) == 2
         assert status["results"][0]["text_score"] is None
+        assert status["job"]["ai_job_id"] == "ai-1"
 
 
 async def test_lost_collection_owner_cannot_write_or_enqueue(session_factory):

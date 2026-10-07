@@ -47,7 +47,9 @@ Data 상품 응답은 analysis 상태·페이지 결과를 제공한다. Spring 
 
 담당자가 https://ai.re-view.kr과 X-Internal-Token 인증을 확인했다.
 신규 POST /api/v1/data/analyze/stream과 Data job ID를 X-Request-ID·Idempotency-Key에
-같이 전달하는 계약을 합의했다. AI 구현·실제 이벤트 예시·인증 토큰은 대기 중이다. Data가 저장된 리뷰를 POST하고
+같이 전달하는 계약을 합의했다. AI 구현·운영 배포 완료 및 main 2346111의 문서·이벤트 형식을 확인했다.
+Data는 request_id로 외부 ID를 검증하고 ai_job_id로 AI 내부 작업을 구분한다.
+서버 토큰 설정 후 저장된 상품 하나로 검증하며 전체 자동 분석은 비활성으로 유지한다. Data가 저장된 리뷰를 POST하고
 응답 SSE를 받는 방향으로 합의하였다. 확정 전에는 자동 호출을 활성화하지 않는다.
 구현·운영 방법은 analysis-pipeline 및 analysis-stream-contract 문서를 따른다.
 
