@@ -131,6 +131,10 @@ async def _save_reviews(product_id: str, reviews: list[Review]) -> None:
             )
         await ReviewRepository(session).upsert_many(PLATFORM, product_id, reviews)
         await product_repo.mark_reviews_collected(PLATFORM, product_id)
+        from review_data.core.db.analysis_repository import AnalysisRepository
+        from review_data.core.settings import get_settings
+
+        await AnalysisRepository(session).enqueue(PLATFORM, product_id, get_settings())
 
 
 def main() -> None:

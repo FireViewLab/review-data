@@ -107,9 +107,7 @@ class ProductRepository:
         stmt = pg_insert(ProductRow).values(
             platform=product.platform, product_id=product.product_id, **values
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["platform", "product_id"], set_=values
-        )
+        stmt = stmt.on_conflict_do_update(index_elements=["platform", "product_id"], set_=values)
         await self.session.execute(stmt)
 
     async def mark_reviews_collected(self, platform: str, product_id: str) -> None:
@@ -171,6 +169,11 @@ class ReviewRepository:
     async def upsert_many(self, platform: str, product_id: str, reviews: list[Review]) -> None:
         if not reviews:
             return
+        await self.session.scalar(
+            select(ProductRow)
+            .where(ProductRow.platform == platform, ProductRow.product_id == product_id)
+            .with_for_update()
+        )
         now = datetime.now(UTC)
         rows = [
             {
@@ -195,6 +198,11 @@ class ReviewRepository:
             index_elements=["platform", "product_id", "review_id"], set_=update_cols
         )
         await self.session.execute(stmt)
+        await self.session.execute(
+            update(ProductRow)
+            .where(ProductRow.platform == platform, ProductRow.product_id == product_id)
+            .values(analysis_input_hash=None)
+        )
 
 
 class CollectionJobRepository:
@@ -215,8 +223,8 @@ class CollectionJobRepository:
 
     async def count_pending(self) -> int:
         """아직 워커가 집지 않은 job 수. 스케줄러가 큐를 넘치게 하지 않으려고 본다."""
-        stmt = select(func.count()).select_from(CollectionJob).where(
-            CollectionJob.status == "pending"
+        stmt = (
+            select(func.count()).select_from(CollectionJob).where(CollectionJob.status == "pending")
         )
         return (await self.session.execute(stmt)).scalar_one()
 

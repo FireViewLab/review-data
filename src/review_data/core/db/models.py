@@ -53,15 +53,13 @@ class ProductRow(Base):
     last_collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    analysis_input_hash: Mapped[str | None] = mapped_column(Text)
+
     # 이 상품의 리뷰를 마지막으로 '성공적으로' 수집한 시각. 리뷰 수집이 실패하면
     # 갱신하지 않으므로, 상품만 성공한 부분 실패를 신선하다고 오판하지 않는다.
     # 리뷰가 실제로 0건이어도 수집 자체가 성공했으면 갱신한다.
-    reviews_last_collected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    reviews_last_collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -104,9 +102,7 @@ class ReviewRow(Base):
     last_collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -155,9 +151,7 @@ class CollectionJob(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     requested_by: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -194,6 +188,13 @@ class AnalysisJob(Base):
     platform: Mapped[str] = mapped_column(Text)
     product_id: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="queued")
+    input_payload: Mapped[dict | None] = mapped_column(JSONB)
+    input_hash: Mapped[str | None] = mapped_column(Text)
+    model_version: Mapped[str | None] = mapped_column(Text)
+    policy_version: Mapped[str | None] = mapped_column(Text)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     trigger_collection_job_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("collection_jobs.id")
     )
@@ -205,9 +206,7 @@ class AnalysisJob(Base):
     locked_by: Mapped[str | None] = mapped_column(Text)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

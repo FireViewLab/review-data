@@ -14,7 +14,7 @@ import 만으로 .env 를 강제하거나 종료해버리면 호스트 앱이 �
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # src/review_data/core/settings.py -> 프로젝트 루트
@@ -71,6 +71,37 @@ class Settings(BaseSettings):
     # 스케줄러가 건드리지 않을 플랫폼(쉼표 구분). 플랫폼 전체가 차단돼 있으면 상품별
     # 대기만으로는 상품 수만큼 요청이 반복되므로 여기서 통째로 뺀다. 예: "gmarket,auction"
     schedule_excluded_platforms: str = ""
+
+    # 분석 연결은 운영 계약과 URL을 확인한 뒤 명시적으로 활성화한다.
+    ai_analysis_enabled: bool = False
+    ai_stream_url: str | None = None
+    ai_internal_token: SecretStr | None = None
+    ai_timeout_seconds: float = Field(default=300.0, gt=0)
+    ai_max_reviews: int = Field(default=500, ge=1, le=500)
+    ai_model_version: str | None = None
+    ai_policy_version: str | None = None
+
+    @model_validator(mode="after")
+    def validate_analysis(self):
+        if self.ai_internal_token is not None and not self.ai_internal_token.get_secret_value():
+            self.ai_internal_token = None
+        self.ai_stream_url = self.ai_stream_url or None
+        self.ai_model_version = self.ai_model_version or None
+        self.ai_policy_version = self.ai_policy_version or None
+        if self.ai_analysis_enabled and not self.ai_stream_url:
+            raise ValueError("AI_STREAM_URL is required when AI_ANALYSIS_ENABLED=true")
+        if self.ai_stream_url:
+            from urllib.parse import urlsplit
+
+            url = urlsplit(self.ai_stream_url)
+            if (
+                url.scheme not in {"http", "https"}
+                or not url.netloc
+                or url.username
+                or url.password
+            ):
+                raise ValueError("AI_STREAM_URL must be an HTTP endpoint without credentials")
+        return self
 
     # ── 플랫폼별 인증 정보 ──────────────────
     # 자기 플랫폼에 키가 필요하면 여기에 추가하고,
