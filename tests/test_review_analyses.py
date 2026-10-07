@@ -177,7 +177,9 @@ async def test_migration_round_trip_preserves_existing_data(engine):
                         "script_location", str(Path(__file__).resolve().parents[1] / "alembic")
                     )
                     scripts = ScriptDirectory.from_config(config)
-                    revisions = list(reversed(list(scripts.walk_revisions())))
+                    revisions = list(
+                        reversed(list(scripts.iterate_revisions("c6f4a28d901b", "base")))
+                    )
                     with Operations.context(MigrationContext.configure(sync_conn)):
                         for revision in revisions[:-1]:
                             revision.module.upgrade()

@@ -170,6 +170,9 @@ async def _collect_reviews(
                 await ProductRepository(session).upsert(product)
                 await ReviewRepository(session).upsert_many(platform, product_id, items)
                 await ProductRepository(session).mark_reviews_collected(platform, product_id)
+                from review_data.core.db.analysis_repository import AnalysisRepository
+
+                await AnalysisRepository(session).enqueue(platform, product_id, get_settings())
             typer.echo(f"  DB 저장 완료 ({len(items)}건)")
     except NotSupportedError as exc:
         typer.secho(f"  건너뜀: {exc}", fg=typer.colors.YELLOW)
@@ -212,12 +215,8 @@ async def _run_worker(once: bool, poll_interval: float) -> None:
             processed = await collection_worker.run_once(session_factory, worker_id)
             typer.echo("job 1건 처리 완료" if processed else "처리할 job 이 없습니다.")
             return
-        typer.secho(
-            f"워커 시작 (id={worker_id}). Ctrl+C 로 종료합니다.", fg=typer.colors.CYAN
-        )
-        await collection_worker.run_forever(
-            session_factory, worker_id, poll_interval=poll_interval
-        )
+        typer.secho(f"워커 시작 (id={worker_id}). Ctrl+C 로 종료합니다.", fg=typer.colors.CYAN)
+        await collection_worker.run_forever(session_factory, worker_id, poll_interval=poll_interval)
     finally:
         await engine.dispose()
 
@@ -310,9 +309,7 @@ async def _run_scheduler(once: bool, interval: float | None) -> None:
                 async with session_factory() as session:
                     result = await SchedulingService(session).run_once()
                     await session.commit()
-                logger.info(
-                    "예약 %d건 (예약 전 대기 %d건)", result.created, result.pending_before
-                )
+                logger.info("예약 %d건 (예약 전 대기 %d건)", result.created, result.pending_before)
             except Exception:  # noqa: BLE001 - DB 가 잠깐 끊겨도 다음 주기에 다시 시도한다
                 if once:
                     raise
@@ -334,6 +331,82 @@ def serve(
     import uvicorn
 
     uvicorn.run("review_data.api.app:app", host="127.0.0.1", port=port, reload=reload)
+
+
+@app.command("analysis-worker")
+def analysis_worker_command(
+    once: bool = typer.Option(False, "--once"),
+    poll_interval: float = typer.Option(5, "--poll-interval", min=0.1),
+) -> None:
+    """저장된 리뷰를 분석하는 독립 워커를 실행합니다."""
+    _require_env()
+    logging.basicConfig(level=logging.INFO)
+    try:
+        asyncio.run(_run_analysis(once, poll_interval, backfill=False, force=False))
+    except KeyboardInterrupt:
+        typer.echo("분석 워커를 종료합니다.")
+
+
+@app.command("analysis-backfill")
+def analysis_backfill(force: bool = typer.Option(False, "--force")) -> None:
+    """기존 리뷰에 분석 작업을 예약합니다. --force는 같은 입력도 다시 분석합니다."""
+    _require_env()
+    asyncio.run(_run_analysis(True, 5, backfill=True, force=force))
+
+
+async def _run_analysis(once: bool, poll_interval: float, *, backfill: bool, force: bool):
+    from sqlalchemy import select
+
+    from review_data.core.db.analysis_repository import AnalysisRepository
+    from review_data.core.db.models import AnalysisJob, ProductRow
+    from review_data.worker import analysis_worker
+
+    settings = get_settings()
+    if not settings.ai_analysis_enabled and (once or backfill):
+        typer.echo("분석 연결이 비활성화되어 있습니다.")
+        return
+    engine = create_engine()
+    factory = create_session_factory(engine)
+    try:
+        if backfill:
+            async with factory() as session:
+                products = (
+                    await session.execute(
+                        select(ProductRow.platform, ProductRow.product_id).where(
+                            ProductRow.reviews_last_collected_at.is_not(None)
+                        )
+                    )
+                ).all()
+            count = 0
+            for platform, product_id in products:
+                async with factory() as session:
+                    previous = await session.scalar(
+                        select(AnalysisJob.id)
+                        .where(
+                            AnalysisJob.platform == platform, AnalysisJob.product_id == product_id
+                        )
+                        .order_by(AnalysisJob.id.desc())
+                        .limit(1)
+                    )
+                    current = await AnalysisRepository(session).enqueue(
+                        platform, product_id, settings, force=force
+                    )
+                    await session.commit()
+                    count += current is not None and current != previous
+            typer.echo(f"분석 작업 {count}건 예약 완료")
+        else:
+            worker_id = f"analysis-{socket.gethostname()}-{os.getpid()}"
+            if once:
+                processed = await analysis_worker.run_once(factory, worker_id, settings=settings)
+                typer.echo(
+                    "분석 작업 1건 처리 완료" if processed else "처리할 분석 작업이 없습니다."
+                )
+            else:
+                await analysis_worker.run_forever(
+                    factory, worker_id, settings=settings, poll_interval=poll_interval
+                )
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

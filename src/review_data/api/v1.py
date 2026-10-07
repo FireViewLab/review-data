@@ -13,9 +13,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.api import docs
-from review_data.core.db.models import CollectionJob, ProductRow, ReviewRow
-from review_data.core.db.repository import InvalidCursorError
+from review_data.core.db.analysis_repository import AnalysisRepository, public_job
+from review_data.core.db.models import AnalysisJob, CollectionJob, ProductRow, ReviewRow
+from review_data.core.db.repository import InvalidCursorError, ReviewRepository
 from review_data.core.service.collection import CollectionResult, CollectionService
+from review_data.core.settings import get_settings
 
 router = APIRouter(prefix="/api/v1")
 
@@ -117,19 +119,21 @@ async def get_product(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100, description="리뷰 페이지 크기")] = 20,
 ) -> JSONResponse:
+    await AnalysisRepository(session).lock_product(platform, product_id, read=True)
     service = CollectionService(session)
     try:
         result = await service.get_or_queue(
             platform, product_id, review_limit=limit, review_cursor=cursor
         )
     except InvalidCursorError as exc:
-        raise _api_error(
-            400, "INVALID_CURSOR", "cursor 값이 올바르지 않습니다.", str(exc)
-        ) from exc
-    await session.commit()
-
+        raise _api_error(400, "INVALID_CURSOR", "cursor 값이 올바르지 않습니다.", str(exc)) from exc
     status_code = 202 if result.status == "queued" else 200
-    return JSONResponse(status_code=status_code, content=_build_body(result))
+    body = _build_body(result)
+    body["analysis"] = await AnalysisRepository(session).status(
+        platform, product_id, get_settings(), [r.review_id for r in result.reviews]
+    )
+    await session.commit()
+    return JSONResponse(status_code=status_code, content=body)
 
 
 @router.get(
@@ -149,3 +153,44 @@ async def get_job(
     if job is None:
         raise _api_error(404, "NOT_FOUND", "job을 찾을 수 없습니다.")
     return _serialize_job(job)
+
+
+@router.get(
+    "/{platform}/products/{product_id}/analysis",
+    tags=[docs.TAG_PRODUCTS],
+    summary="저장된 분석 상태·결과 조회",
+    response_model=None,
+)
+async def get_analysis(
+    platform: str,
+    product_id: str,
+    session: SessionDep,
+    cursor: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+) -> dict:
+    if await AnalysisRepository(session).lock_product(platform, product_id, read=True) is None:
+        raise _api_error(404, "NOT_FOUND", "상품을 찾을 수 없습니다.")
+    try:
+        reviews, next_cursor = await ReviewRepository(session).list_page(
+            platform, product_id, limit=limit, cursor=cursor
+        )
+    except InvalidCursorError as exc:
+        raise _api_error(400, "INVALID_CURSOR", "cursor 값이 올바르지 않습니다.") from exc
+    body = await AnalysisRepository(session).status(
+        platform, product_id, get_settings(), [r.review_id for r in reviews]
+    )
+    body["next_cursor"] = next_cursor
+    return body
+
+
+@router.get(
+    "/analysis-jobs/{job_id}",
+    tags=[docs.TAG_JOBS],
+    summary="분석 작업 상태 조회",
+    response_model=None,
+)
+async def get_analysis_job(job_id: int, session: SessionDep) -> dict:
+    job = await session.get(AnalysisJob, job_id)
+    if job is None:
+        raise _api_error(404, "NOT_FOUND", "분석 작업을 찾을 수 없습니다.")
+    return public_job(job)

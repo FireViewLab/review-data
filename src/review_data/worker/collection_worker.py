@@ -17,12 +17,16 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from review_data.core.base import BaseCollector
 from review_data.core.browser import BrowserCollector
+from review_data.core.db.analysis_repository import AnalysisRepository
+from review_data.core.db.models import CollectionJob
 from review_data.core.db.repository import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_PLATFORM_CAP,
@@ -67,9 +71,7 @@ def _is_browser_based(collector_cls: type[BaseCollector]) -> bool:
     return issubclass(collector_cls, BrowserCollector)
 
 
-def _platform_caps(
-    registry: dict[str, type[BaseCollector]], settings: Settings
-) -> dict[str, int]:
+def _platform_caps(registry: dict[str, type[BaseCollector]], settings: Settings) -> dict[str, int]:
     """플랫폼별 동시 실행 상한. 브라우저 기반은 자원을 훨씬 많이 쓰므로 따로 잡는다."""
     return {
         platform: (
@@ -139,7 +141,9 @@ async def run_once(
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat
 
-    product_status, review_status, errors = await _persist(session_factory, claim, collected)
+    product_status, review_status, errors = await _persist(
+        session_factory, claim, collected, settings=settings
+    )
     await _finish(
         session_factory,
         claim,
@@ -217,9 +221,7 @@ async def _claim(
     return claim
 
 
-async def _heartbeat(
-    session_factory: SessionFactory, claim: _Claim, lease_seconds: int
-) -> None:
+async def _heartbeat(session_factory: SessionFactory, claim: _Claim, lease_seconds: int) -> None:
     """수집이 길어져도 lease 가 만료되지 않도록 주기적으로 연장한다.
 
     소유권을 잃으면 조용히 멈춘다. 뒤이은 완료 기록은 어차피 소유권 조건에서 거부되므로
@@ -254,9 +256,7 @@ async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collec
                 collected.product = await collector.get_product(claim.product_id)
             except CollectorError as exc:
                 collected.errors.append(f"product: {exc}")
-                logger.warning(
-                    "[%s/%s] 상품 수집 실패: %s", claim.platform, claim.product_id, exc
-                )
+                logger.warning("[%s/%s] 상품 수집 실패: %s", claim.platform, claim.product_id, exc)
 
             try:
                 collected.reviews = await collector.get_reviews(
@@ -264,9 +264,7 @@ async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collec
                 )
             except CollectorError as exc:
                 collected.errors.append(f"review: {exc}")
-                logger.warning(
-                    "[%s/%s] 리뷰 수집 실패: %s", claim.platform, claim.product_id, exc
-                )
+                logger.warning("[%s/%s] 리뷰 수집 실패: %s", claim.platform, claim.product_id, exc)
     except Exception as exc:  # noqa: BLE001 - job 을 실패로 남기고 워커는 계속 돈다
         # 메시지가 비어 있는 예외(타임아웃 등)도 있어서 종류를 함께 남긴다.
         collected.errors.append(f"unexpected: {type(exc).__name__}: {exc}")
@@ -277,13 +275,18 @@ async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collec
 
 
 async def _persist(
-    session_factory: SessionFactory, claim: _Claim, collected: _Collected
+    session_factory: SessionFactory,
+    claim: _Claim,
+    collected: _Collected,
+    *,
+    settings: Settings | None = None,
 ) -> tuple[str, str, list[str]]:
     """수집 결과를 각각 독립된 트랜잭션으로 저장한다.
 
     product 저장이 실패해도 review 저장을 시도하고, 그 반대도 마찬가지다. 실패한
     트랜잭션의 세션을 다시 쓰지 않으므로 뒤따르는 완료 기록이 말려들지 않는다.
     """
+    settings = settings or get_settings()
     errors = list(collected.errors)
     product_status = "failed"
     review_status = "failed"
@@ -292,6 +295,9 @@ async def _persist(
         try:
             async with session_factory() as session:
                 await ProductRepository(session).upsert(collected.product)
+                if not await _owns_collection(session, claim):
+                    await session.rollback()
+                    return "failed", "failed", ["수집 작업 소유권 상실"]
                 await session.commit()
             product_status = "succeeded"
         except SQLAlchemyError as exc:
@@ -303,6 +309,9 @@ async def _persist(
     if collected.reviews is not None:
         try:
             async with session_factory() as session:
+                await AnalysisRepository(session).lock_product(claim.platform, claim.product_id)
+                if not await _owns_collection(session, claim):
+                    return product_status, "failed", [*errors, "수집 작업 소유권 상실"]
                 await ReviewRepository(session).upsert_many(
                     claim.platform, claim.product_id, collected.reviews
                 )
@@ -310,6 +319,9 @@ async def _persist(
                 # 상품이 매번 재수집 대상이 된다.
                 await ProductRepository(session).mark_reviews_collected(
                     claim.platform, claim.product_id
+                )
+                await AnalysisRepository(session).enqueue(
+                    claim.platform, claim.product_id, settings, trigger=claim.job_id
                 )
                 await session.commit()
             review_status = "succeeded"
@@ -345,6 +357,18 @@ async def _finish(
         return
 
     if not owned:
-        logger.warning(
-            "[job %s] lease 를 잃어 완료 상태를 기록하지 않았습니다.", claim.job_id
+        logger.warning("[job %s] lease 를 잃어 완료 상태를 기록하지 않았습니다.", claim.job_id)
+
+
+async def _owns_collection(session, claim: _Claim) -> bool:
+    job = await session.scalar(
+        select(CollectionJob)
+        .where(
+            CollectionJob.id == claim.job_id,
+            CollectionJob.status == "running",
+            CollectionJob.locked_by == claim.worker_id,
+            CollectionJob.lease_expires_at > datetime.now(UTC),
         )
+        .with_for_update(key_share=True)
+    )
+    return job is not None
