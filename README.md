@@ -274,7 +274,12 @@ docker compose exec -T analysis-worker crawler analysis-backfill
 
 `analysis-backfill`은 기존 상품의 저장 리뷰를 예약하며 같은 입력·버전은 재사용한다.
 같은 입력도 다시 분석하려면 `--force`를 명시한다. 버전 변경은 기존 결과를 stale로 처리한다.
-500개 초과 리뷰는 분할 계약 확정 전까지 분석 실패로 기록하고 AI에 전송하지 않는다.
+500건 이하는 저장된 리뷰 전체를 분석한다. 초과하면 별점 분포에 비례해 최대500건을
+선택하고 최고·최저 별점 및 별점 미제공 구간도 포함한다. 같은 입력은 같은 표본을 선택한다.
+분석 응답의 `sampled`·`source_review_count`·`sampling`으로 표본 여부와 원본 분포를
+표시하며 `review_count`는 실제 분석 건수다. 비선택 리뷰의 점수는 반환하지 않는다.
+표본의 network 점수는 해당 표본 집합에 대한 결과다. 세부 정책은
+[대표 표본 정책](docs/projects/review-data/specs/2026-10-07-analysis-sampling.md)을 따른다.
 분석 중 409(`IDEMPOTENCY_IN_PROGRESS`)·429·5xx·타임아웃·스트림 끊김은
 같은 키로 최대 3회 재시도하며 인증·계약 오류는 즉시 실패한다.
 오류에는 원본 입력·토큰을 기록하지 않는다. 운영 상세는
