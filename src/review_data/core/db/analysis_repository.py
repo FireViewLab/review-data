@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
 from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow, ReviewRow
 from review_data.core.settings import Settings
 
@@ -46,10 +47,20 @@ class AnalysisRepository:
     @staticmethod
     def _same(job: AnalysisJob, digest: str, settings: Settings) -> bool:
         payload = job.input_payload or {}
+        sampling = sampling_info(job)
+        needs_sample = sampling["source_review_count"] > settings.ai_max_reviews
+        selection_matches = sampling["sampled"] == needs_sample and (
+            not needs_sample
+            or (
+                sampling.get("policy_version") == SAMPLING_VERSION
+                and sampling.get("max_reviews") == settings.ai_max_reviews
+            )
+        )
         return (
             job.input_hash == digest
             and payload.get("model_version") == settings.ai_model_version
             and payload.get("policy_version") == settings.ai_policy_version
+            and selection_matches
         )
 
     async def enqueue(
@@ -92,23 +103,21 @@ class AnalysisRepository:
         )
         if not reviews or not settings.ai_analysis_enabled:
             return None
+        selected, sampling = select_reviews(reviews, settings.ai_max_reviews)
         payload = {
-            "reviews": reviews,
+            "reviews": selected,
+            "sampling": sampling,
             "model_version": settings.ai_model_version,
             "policy_version": settings.ai_policy_version,
         }
-        oversized = len(reviews) > settings.ai_max_reviews
         job = AnalysisJob(
             platform=platform,
             product_id=product_id,
             input_hash=digest,
-            input_payload=payload if not oversized else {**payload, "reviews": []},
-            input_review_count=len(reviews),
+            input_payload=payload,
+            input_review_count=len(selected),
             trigger_collection_job_id=trigger,
-            status="failed" if oversized else "queued",
-            last_error="리뷰 수가 분석 상한을 초과했습니다. 분할 계약이 필요합니다."
-            if oversized
-            else None,
+            status="queued",
         )
         self.session.add(job)
         await self.session.flush()
@@ -272,8 +281,12 @@ class AnalysisRepository:
                         "reasons": r.reasons,
                     }
                 )
+        sampling = sampling_info(job)
         return {
             "status": status,
+            "sampled": sampling["sampled"],
+            "source_review_count": sampling["source_review_count"],
+            "sampling": sampling,
             "job": public_job(job),
             "input_hash": job.input_hash,
             "model_version": job.model_version,
@@ -288,7 +301,10 @@ def _number(value):
 
 
 def public_job(job: AnalysisJob) -> dict:
+    sampling = sampling_info(job)
     return {
+        "sampled": sampling["sampled"],
+        "source_review_count": sampling["source_review_count"],
         "id": job.id,
         "platform": job.platform,
         "product_id": job.product_id,
@@ -298,4 +314,17 @@ def public_job(job: AnalysisJob) -> dict:
         "input_review_count": job.input_review_count,
         "last_error": job.last_error,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+def sampling_info(job: AnalysisJob) -> dict:
+    stored = (job.input_payload or {}).get("sampling")
+    if stored is not None:
+        return stored
+    count = job.input_review_count or 0
+    return {
+        "sampled": False,
+        "method": "all",
+        "source_review_count": count,
+        "analyzed_review_count": count,
     }

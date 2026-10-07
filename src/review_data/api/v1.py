@@ -104,7 +104,8 @@ def _build_body(result: CollectionResult) -> dict:
     tags=[docs.TAG_PRODUCTS],
     summary="상품·리뷰 조회",
     description="저장된 상품과 리뷰 한 페이지를 돌려준다. 오래됐거나 없으면 수집 job 을 만든다. "
-    "응답 `status` 로 fresh / stale / queued 를 구분한다.",
+    "응답 `status` 로 fresh / stale / queued 를 구분한다. "
+    "analysis.sampled와 source_review_count로 대표 표본 여부와 저장 원본 건수를 확인한다.",
     response_model=None,
     responses=docs.PRODUCT_RESPONSES,
 )
@@ -159,6 +160,8 @@ async def get_job(
     "/{platform}/products/{product_id}/analysis",
     tags=[docs.TAG_PRODUCTS],
     summary="저장된 분석 상태·결과 조회",
+    description="review_count는 분석 건수, source_review_count는 저장 원본 건수다. "
+    "sampled=true는 별점 분포 대표 표본이며 results에는 현재 페이지의 실제 분석 결과만 포함한다.",
     response_model=None,
 )
 async def get_analysis(

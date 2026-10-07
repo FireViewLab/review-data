@@ -196,17 +196,19 @@ async def test_expired_lease_recovery_and_old_owner_rejection(session_factory):
         assert (await s.get(AnalysisJob, job)).status == "failed"
 
 
-async def test_disabled_and_oversized_inputs_never_call_ai(session_factory):
+async def test_disabled_skips_ai_and_oversized_input_uses_sample(session_factory):
     client = Client()
     assert not await run_once(
         session_factory, "w", settings=Settings(_env_file=None), client=client
     )
     job = await seed(session_factory, config(ai_max_reviews=1))
-    assert not await run_once(session_factory, "w", settings=config(), client=client)
-    assert client.calls == 0
+    assert await run_once(session_factory, "w", settings=config(ai_max_reviews=1), client=client)
+    assert client.calls == 1
     async with session_factory() as s:
         row = await s.get(AnalysisJob, job)
-        assert row.status == "failed" and row.input_review_count == 2
+        assert row.status == "done" and row.input_review_count == 1
+        assert row.input_payload["sampling"]["source_review_count"] == 2
+        assert row.input_payload["sampling"]["sampled"] is True
 
 
 async def test_heartbeat_keeps_lease_alive_and_cancellation_releases_tasks(session_factory):
@@ -585,3 +587,120 @@ async def test_shared_read_prevents_mixed_review_analysis_pages(session_factory)
     await task
     async with session_factory() as s:
         assert (await AnalysisRepository(s).status("kurly", "p", config()))["status"] == "queued"
+
+
+async def test_large_product_sends_sample_and_reports_coverage(session_factory):
+    from fastapi.testclient import TestClient
+
+    from review_data.api.app import app
+
+    await seed(session_factory, count=600)
+    async with session_factory() as s:
+        await s.execute(update(ReviewRow).where(ReviewRow.review_id == "r0").values(rating=1))
+        await s.execute(update(ReviewRow).where(ReviewRow.review_id == "r599").values(rating=5))
+        job = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+    client = Client()
+    await run_once(session_factory, "w", settings=config(), client=client)
+    assert client.calls == 1
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, job)
+        assert row.input_review_count == len(row.input_payload["reviews"]) == 500
+        assert {"r0", "r599"}.issubset({r["review_id"] for r in row.input_payload["reviews"]})
+        body = await AnalysisRepository(s).status("kurly", "p", config())
+        assert body["status"] == "done" and body["sampled"] is True
+        assert body["review_count"] == 500 and body["source_review_count"] == 600
+        assert body["sampling"]["source_rating_distribution"] == {"1": 1, "5": 1, "unrated": 598}
+        assert body["sampling"]["sample_rating_distribution"] == {"1": 1, "5": 1, "unrated": 498}
+        selected = {r["review_id"] for r in row.input_payload["reviews"]}
+        unselected = sorted({f"r{i}" for i in range(600)} - selected)
+        page = await AnalysisRepository(s).status("kurly", "p", config(), unselected)
+        assert page["results"] == [] and page["sampled"] is True
+        assert len(list(await s.scalars(select(ReviewRow)))) == 600
+    with TestClient(app) as http:
+        body = http.get("/api/v1/kurly/products/p/analysis", params={"limit": 100}).json()
+        assert body["sampled"] is True and body["source_review_count"] == 600
+        assert body["review_count"] == 500 and len(body["results"]) <= 100
+        job_body = http.get(f"/api/v1/analysis-jobs/{job}").json()
+        assert job_body["sampled"] is True and job_body["input_review_count"] == 500
+        assert job_body["source_review_count"] == 600
+
+
+async def test_unselected_review_change_invalidates_sample(session_factory):
+    old = await seed(session_factory, count=600)
+    await run_once(session_factory, "w", settings=config(), client=Client())
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, old)
+        selected = {r["review_id"] for r in row.input_payload["reviews"]}
+        unselected = next(f"r{i}" for i in range(600) if f"r{i}" not in selected)
+        old_hash = row.input_hash
+        await s.execute(
+            update(ReviewRow)
+            .where(ReviewRow.review_id == unselected)
+            .values(content="비선택 리뷰 변경")
+        )
+        new = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+        assert new != old and (await s.get(AnalysisJob, old)).status == "stale"
+        assert (await s.get(AnalysisJob, new)).input_hash != old_hash
+        assert {
+            r["review_id"] for r in (await s.get(AnalysisJob, new)).input_payload["reviews"]
+        } == selected
+        assert (await AnalysisRepository(s).status("kurly", "p", config()))["results"] == []
+
+
+async def test_sample_policy_and_limit_changes_create_new_jobs(session_factory):
+    first = await seed(session_factory, count=600)
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, first)
+        row.input_payload = {
+            **row.input_payload,
+            "sampling": {**row.input_payload["sampling"], "policy_version": "previous-policy"},
+        }
+        await s.commit()
+    async with session_factory() as s:
+        second = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+        assert second != first
+    async with session_factory() as s:
+        assert await AnalysisRepository(s).enqueue("kurly", "p", config()) == second
+        third = await AnalysisRepository(s).enqueue("kurly", "p", config(ai_max_reviews=200))
+        await s.commit()
+        assert third != second
+        assert (await s.get(AnalysisJob, third)).input_review_count == 200
+
+
+async def test_legacy_full_result_reused_and_oversized_failure_replaced(session_factory):
+    old = await seed(session_factory)
+    await run_once(session_factory, "w", settings=config(), client=Client())
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, old)
+        row.input_payload = {k: v for k, v in row.input_payload.items() if k != "sampling"}
+        await s.commit()
+    async with session_factory() as s:
+        assert await AnalysisRepository(s).enqueue("kurly", "p", config()) == old
+        body = await AnalysisRepository(s).status("kurly", "p", config())
+        assert body["status"] == "done" and body["sampled"] is False
+        assert body["source_review_count"] == 2
+        s.add_all(
+            [
+                ReviewRow(platform="kurly", product_id="p", review_id=f"extra{i}", content="리뷰")
+                for i in range(600)
+            ]
+        )
+        await s.flush()
+        oversized = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, oversized)
+        row.status = "failed"
+        row.input_review_count = 602
+        row.input_payload = {k: v for k, v in row.input_payload.items() if k != "sampling"}
+        row.input_payload = {**row.input_payload, "reviews": []}
+        await s.commit()
+    async with session_factory() as s:
+        replacement = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+        assert replacement != oversized
+        assert (await s.get(AnalysisJob, replacement)).status == "queued"
+        assert (await s.get(AnalysisJob, replacement)).input_review_count == 500
