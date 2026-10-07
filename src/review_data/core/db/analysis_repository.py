@@ -210,7 +210,7 @@ class AnalysisRepository:
             )
         job.model_version = response.model_version
         job.policy_version = response.policy_version
-        job.result = {"review_count": len(results)}
+        job.result = {"review_count": len(results), "ai_job_id": response.ai_job_id}
         job.status = "done"
         job.completed_at = datetime.now(UTC)
         job.lease_expires_at = None
@@ -294,6 +294,7 @@ def public_job(job: AnalysisJob) -> dict:
         "product_id": job.product_id,
         "status": job.status,
         "attempt_count": job.attempt_count,
+        "ai_job_id": (job.result or {}).get("ai_job_id"),
         "input_review_count": job.input_review_count,
         "last_error": job.last_error,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
