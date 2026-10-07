@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       # 통합 테스트는 DB 에 연결하지 못하면 skip 된다. 여기서 DB 가 없으면 테스트가 돌지
       # 않은 채 통과로 보이므로, 반드시 서비스로 띄운다.
@@ -27,23 +27,23 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/review_data
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
       - run: ruff check .
       # skip 이 하나라도 있으면 DB 연결이 안 된 것이므로 실패시킨다.
-      - run: pytest -q -rs | tee pytest.log; test ${PIPESTATUS[0]} -eq 0 && ! grep -q "SKIPPED" pytest.log
+      - run: pytest -q -rs | tee pytest.log; test "${PIPESTATUS[0]}" -eq 0 && ! grep -q "SKIPPED" pytest.log
 
   image:
     # 이미지가 빌드되는지만 확인한다. 레지스트리 업로드는 main 배포에서만 한다.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/build-push-action@v7.4.0
         with:
           context: .
           push: false

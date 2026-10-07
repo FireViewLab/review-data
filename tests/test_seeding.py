@@ -113,7 +113,9 @@ def test_default_seed_matches_spec():
         "kurly": ("닭가슴살", "샐러드", "밀키트", "그릭요거트", "만두"),
         "elevenst": ("생수", "물티슈", "이어폰", "보조배터리", "영양제"),
     }
-    assert plan.products == {"naver": ("zinus:6000252751",)}
+    assert plan.products == {
+        "naver": ("zinus:6000252751", "locknlock:11614753248", "philipshue:8140149248")
+    }
     assert plan.expand == {"naver": 20}
 
 
