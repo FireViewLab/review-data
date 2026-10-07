@@ -7,7 +7,8 @@
 AI 서버에서 구현한다. 기존 POST /api/v1/data/analyze JSON API는 유지한다.
 AI main 2346111의 docs/data-analysis-stream.md와 구현에서 실제 이벤트 형식을 확인했다.
 인증은 서버 AI_INTERNAL_TOKEN으로 설정하고 저장 상품 하나의 소규모 연동을 검증한다.
-운영 분석 워커는 기본 비활성으로 유지한다. 활성화·저장·배포 절차는
+설정 기본은 비활성이며 운영은 단일 상품 검증 후 전체 분석을 활성화한다.
+500건 초과는 Data에서 대표 표본을 선택하고 v0.5 본문은 유지한다. 활성화·저장·배포 절차는
 분석 파이프라인 문서를 따른다.
 
 `core/analysis_stream.py`는 HTTP 스트림 경계 검증을 담당한다.
@@ -107,7 +108,7 @@ PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_analysis_stream.py
 .venv/bin/ruff check src/review_data/core/analysis_stream.py tests/test_analysis_stream.py
 ```
 
-독립 SSE 테스트 185개, PostgreSQL 포함 전체 526개 통과.
+독립 SSE 테스트 185개, PostgreSQL 포함 전체 556개 통과.
 토큰·본문·오류 원문을 출력하지 않는다.
 
 ## 운영 계약 출처
