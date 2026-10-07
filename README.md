@@ -256,12 +256,13 @@ class MusinsaCollector(BrowserCollector):
 - 점수 없음은 `null`이며 점수 `0`은 그대로 보존한다. 응답 레벨·이유는 AI 결과를 사용한다.
 
 기본 `AI_ANALYSIS_ENABLED=false`다. 합의된 신규 URL은
-`https://ai.re-view.kr/api/v1/data/analyze/stream`이다. endpoint 구현·인증 토큰·실제
-SSE JSON 예시 확인과 소규모 검증 후 활성화한다.
+`https://ai.re-view.kr/api/v1/data/analyze/stream`이다. AI 운영 문서의 `request_id`·`ai_job_id` 이벤트 규격을 따른다. 서버 인증 토큰 설정과
+소규모 검증 후 전체 자동 분석을 활성화한다.
 현재 운영 JSON `/api/v1/data/analyze`를 SSE URL로 그대로 지정하면 안 된다.
 [합의 SSE 계약](docs/projects/review-data/specs/2026-10-07-analysis-stream-contract.md)을 담당자와 확인한다.
 요청의 `X-Request-ID`와 `Idempotency-Key`는 같은 Data 분석 job ID를 사용한다.
-AI 내부 `X-Analysis-Job-ID`와 구분하고 재시도에도 Data ID를 유지한다.
+이벤트 `request_id`는 Data ID이고 `ai_job_id`·응답 `X-Analysis-Job-ID`는 AI 내부 ID다.
+재시도에도 Data ID를 유지하고 AI 내부 ID는 완료 기록에 보존한다.
 서버 `.env`에 `AI_STREAM_URL`, 인증용 `AI_INTERNAL_TOKEN`,
 `AI_MODEL_VERSION`·`AI_POLICY_VERSION`을 설정하고 `AI_ANALYSIS_ENABLED=true`로 전환한다.
 토큰은 채팅·로그에 출력하지 않는다. 설정 변경 후 다음과 같이 적용한다.
@@ -274,6 +275,7 @@ docker compose exec -T analysis-worker crawler analysis-backfill
 `analysis-backfill`은 기존 상품의 저장 리뷰를 예약하며 같은 입력·버전은 재사용한다.
 같은 입력도 다시 분석하려면 `--force`를 명시한다. 버전 변경은 기존 결과를 stale로 처리한다.
 500개 초과 리뷰는 분할 계약 확정 전까지 분석 실패로 기록하고 AI에 전송하지 않는다.
-429·5xx·타임아웃·스트림 끊김은 최대 3회 재시도하며 인증·계약 오류는 즉시 실패한다.
+분석 중 409(`IDEMPOTENCY_IN_PROGRESS`)·429·5xx·타임아웃·스트림 끊김은
+같은 키로 최대 3회 재시도하며 인증·계약 오류는 즉시 실패한다.
 오류에는 원본 입력·토큰을 기록하지 않는다. 운영 상세는
 [분석 파이프라인](docs/projects/review-data/specs/2026-10-07-analysis-pipeline.md)을 참고한다.

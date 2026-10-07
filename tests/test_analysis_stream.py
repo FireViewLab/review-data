@@ -14,9 +14,19 @@ from review_data.core.analysis_stream import (
 
 URL = "https://analysis.example/experimental/analyze?contract=v0.5"
 REVIEWS = [{"review_id": "r1", "content": "실제 리뷰", "rating": 5, "written_at": None}]
-META = {"analysis_job_id": 7}
-DONE = {"analysis_job_id": 7, "result_count": 1}
+META = {
+    "request_id": "7",
+    "ai_job_id": "ai-job-1",
+    "platform": "naver",
+    "product_id": "p1",
+    "review_count": 1,
+    "contract_version": "v0.5",
+    "model_version": "m1",
+    "policy_version": "p1",
+}
+DONE = {"request_id": "7", "ai_job_id": "ai-job-1", "result_count": 1}
 RESULT = {
+    "request_id": "7",
     "review_id": "r1",
     "rti": 0,
     "level": None,
@@ -126,7 +136,16 @@ async def test_request_and_normalized_result(mock_http):
     assert result.model_version == "m1"
     assert result.policy_version == "p2"
     assert result.results == [
-        {**RESULT, "rti": Decimal(0), "text_score": None, "network_score": Decimal("99.5")}
+        {
+            k: v
+            for k, v in {
+                **RESULT,
+                "rti": Decimal(0),
+                "text_score": None,
+                "network_score": Decimal("99.5"),
+            }.items()
+            if k != "request_id"
+        }
     ]
     request = mock_http.requests[0]
     assert str(request.url) == URL
@@ -158,9 +177,9 @@ async def test_request_and_normalized_result(mock_http):
 async def test_crlf_multiline_comments_bom_and_single_byte_chunks(mock_http):
     body = (
         b"\xef\xbb\xbf: comment\r\nid: 1\r\nretry: 1000\r\n\r\n"
-        b'event: meta\r\ndata: {\r\ndata: "analysis_job_id": 7}\r\n\r\n'
-        + event("heartbeat", {})
-        + event("progress", {"percent": 50})
+        + event("meta", META).replace(b"data: {", b"data: {\ndata: ").replace(b"\n", b"\r\n")
+        + event("heartbeat", {"request_id": "7"})
+        + event("progress", {"request_id": "7", "stage": "analyzing", "processed": 0})
         + event("result", RESULT)
         + event("done", DONE)
         + b"\n\r\n"
@@ -177,7 +196,7 @@ async def test_order_precision_and_equivalent_duplicate(mock_http):
         b'"rti": 0', b'"rti": 0.12345678901234567890123456789'
     )
     mock_http(
-        event("meta", META)
+        event("meta", {**META, "review_count": 2})
         + second
         + first
         + duplicate
@@ -241,9 +260,9 @@ async def test_levels_and_reasons(mock_http, level):
     "meta",
     [
         {},
-        {"analysis_job_id": 8},
-        {"analysis_job_id": True},
-        {"analysis_job_id": "7"},
+        {"request_id": "8"},
+        {"request_id": True},
+        {"request_id": 7},
         {**META, "model_version": 1},
     ],
 )
@@ -265,15 +284,15 @@ async def test_configured_versions_must_match(mock_http, field, value):
 async def test_unconfigured_versions_are_preserved(mock_http):
     mock_http(complete(meta={**META, "model_version": "server-model"}))
     result = await analyze()
-    assert result.model_version == "server-model" and result.policy_version is None
+    assert result.model_version == "server-model" and result.policy_version == "p1"
 
 
 @pytest.mark.parametrize(
     "done",
     [
         {},
-        {**DONE, "analysis_job_id": 8},
-        {**DONE, "analysis_job_id": True},
+        {**DONE, "request_id": "8"},
+        {**DONE, "request_id": True},
         {**DONE, "result_count": 0},
         {**DONE, "result_count": 2},
         {**DONE, "result_count": True},
@@ -332,7 +351,16 @@ async def test_invalid_json_or_encoding(mock_http, raw):
 @pytest.mark.parametrize("retryable", [False, True, None, "true"])
 async def test_error_event(mock_http, retryable):
     mock_http(
-        event("meta", META) + event("error", {"retryable": retryable, "message": "private details"})
+        event("meta", META)
+        + event(
+            "error",
+            {
+                "request_id": "7",
+                "ai_job_id": "ai-job-1",
+                "retryable": retryable,
+                "message": "private details",
+            },
+        )
     )
     with pytest.raises(AnalysisStreamError) as exc:
         await analyze()
@@ -503,9 +531,89 @@ async def test_retries_keep_data_job_identity_and_new_jobs_use_new_keys(mock_htt
     assert first == replayed
     keys = [r.headers["idempotency-key"] for r in mock_http.requests]
     assert keys == ["7", "7"]
-    mock_http(complete(meta={"analysis_job_id": 8}, done={"analysis_job_id": 8, "result_count": 1}))
+    mock_http(
+        complete(
+            meta={**META, "request_id": "8"},
+            done={**DONE, "request_id": "8"},
+            result={**RESULT, "request_id": "8"},
+        )
+    )
     await AnalysisStreamClient(URL).analyze("naver", "p1", REVIEWS, 8, "hash123")
     assert mock_http.requests[-1].headers["idempotency-key"] == "8"
     assert all(
         r.headers["x-request-id"] == r.headers["idempotency-key"] for r in mock_http.requests
     )
+
+
+@pytest.mark.parametrize(
+    "code,retryable",
+    [
+        ("IDEMPOTENCY_IN_PROGRESS", True),
+        ("IDEMPOTENCY_KEY_REUSED", False),
+        ("IDEMPOTENCY_FAILED", False),
+        ("UNKNOWN", False),
+    ],
+)
+async def test_idempotency_conflict_classification(mock_http, code, retryable):
+    stream = mock_http(
+        json.dumps({"detail": {"code": code}}).encode(), status=409, content_type="application/json"
+    )
+    with pytest.raises(AnalysisStreamError) as error:
+        await analyze()
+    assert error.value.retryable is retryable
+    assert stream.closed and code not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"invalid",
+        b"[]",
+        b"{}",
+        b"x" * 4097,
+        b'{"detail":{"code":"IDEMPOTENCY_IN_PROGRESS","code":"UNKNOWN"}}',
+    ],
+)
+async def test_invalid_or_oversized_conflict_body_is_not_retryable(mock_http, body):
+    mock_http(body, status=409, content_type="application/json")
+    with pytest.raises(AnalysisStreamError) as error:
+        await analyze()
+    assert not error.value.retryable
+
+
+@pytest.mark.parametrize("name", ["result", "progress", "heartbeat", "done", "error"])
+@pytest.mark.parametrize("request_id", [None, 7, "8", "07"])
+async def test_every_event_is_bound_to_data_request(mock_http, name, request_id):
+    data = {**(RESULT if name == "result" else DONE), "request_id": request_id, "retryable": True}
+    mock_http(event("meta", META) + event(name, data))
+    with pytest.raises(AnalysisStreamError) as error:
+        await analyze()
+    assert not error.value.retryable
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("platform", "kurly"),
+        ("product_id", "other"),
+        ("review_count", 2),
+        ("review_count", True),
+        ("contract_version", "v1"),
+        ("ai_job_id", ""),
+        ("model_version", None),
+        ("policy_version", None),
+    ],
+)
+async def test_meta_validates_input_and_contract(mock_http, field, value):
+    mock_http(complete(meta={**META, field: value}))
+    with pytest.raises(AnalysisStreamError) as error:
+        await analyze()
+    assert not error.value.retryable
+
+
+async def test_internal_ai_job_is_preserved_and_consistent(mock_http):
+    mock_http(complete())
+    assert (await analyze()).ai_job_id == "ai-job-1"
+    mock_http(complete(done={**DONE, "ai_job_id": "different-ai-job"}))
+    with pytest.raises(AnalysisStreamError):
+        await analyze()

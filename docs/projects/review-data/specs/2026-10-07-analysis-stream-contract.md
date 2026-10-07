@@ -5,7 +5,8 @@
 담당자와 POST 저장 리뷰 → 응답 SSE 방향 및 요청 식별자 계약을 합의했다.
 운영 base URL은 https://ai.re-view.kr이며 신규 POST /api/v1/data/analyze/stream을
 AI 서버에서 구현한다. 기존 POST /api/v1/data/analyze JSON API는 유지한다.
-실제 이벤트 JSON 예시·인증 토큰 전달과 소규모 연동 검증은 대기 중이다.
+AI main 2346111의 docs/data-analysis-stream.md와 구현에서 실제 이벤트 형식을 확인했다.
+인증은 서버 AI_INTERNAL_TOKEN으로 설정하고 저장 상품 하나의 소규모 연동을 검증한다.
 운영 분석 워커는 기본 비활성으로 유지한다. 활성화·저장·배포 절차는
 분석 파이프라인 문서를 따른다.
 
@@ -39,7 +40,8 @@ url은 전체 endpoint이며 경로를 추가하지 않는다. POST JSON body는
 사용한다. AI는 중복 분석을 막고 이미 완료된 결과는 SSE로 재전송한다. 입력·설정 버전이
 바뀌면 Data가 새 job ID를 발급한다. 입력 스냅샷·hash는 Data DB에 보존한다.
 AI 내부 작업용 X-Analysis-Job-ID는 Data에서 전송하지 않고 외부 연동 ID와 구분한다.
-meta/done의 analysis_job_id는 Data ID이며 AI 내부 작업 ID로 교체하면 안 된다.
+모든 이벤트 request_id는 Data ID의 문자열이다. meta/done/error의 ai_job_id는
+AI 내부 ID이며 Data ID와 구분한다. AI 내부 ID는 완료 기록 result JSON에 보존한다.
 job_id는 양의 정수이며
 boolean은 거부한다. 버전 옵션은 body에 추가하지 않고 meta 검증에 사용한다.
 redirect는 따르지 않는다. HTTP 클라이언트·응답 스트림은 각 호출의 async context에서
@@ -57,11 +59,11 @@ UTF-8, LF/CRLF, 빈 줄 구분, 주석, 여러 data 줄을 처리한다. 여러 
 
 | 이벤트 | data 계약 |
 |---|---|
-| meta | `analysis_job_id` 필수, 요청 job_id와 동일한 정수. `model_version`, `policy_version`을 제공한다. JSON 예시 수신 전에는 null·누락을 허용하며 설정 버전이 있으면 일치를 요구한다 |
-| result | `review_id`, `rti`, `level`, `text_score`, `behavior_score`, `network_score`, `reasons` 필수 |
-| heartbeat / progress | JSON object. 추가 업무 필드 의미는 추후 확정 |
-| done | `analysis_job_id`와 `result_count` 필수, 요청 job과 전체 입력 리뷰 수에 일치하는 정수 |
-| error | 항상 실패. 선택적 boolean `retryable`이 true일 때만 재시도 가능한 서버 오류로 분류 |
+| meta | `request_id` 문자열·`ai_job_id`·platform/product_id/review_count·contract_version=v0.5·model_version/policy_version 필수 |
+| result | `request_id`, `review_id`, `rti`, `level`, `text_score`, `behavior_score`, `network_score`, `reasons` 필수 |
+| heartbeat / progress | request_id 필수. progress는 stage/processed/total, heartbeat는 약15초 간격이며 짧은 분석에는 없을 수 있다 |
+| done | request_id·ai_job_id·result_count 필수. Data ID·meta의 AI ID·전체 입력 건수와 일치해야 한다 |
+| error | request_id·ai_job_id를 검사하고 실패한다. code/message는 AI 제공, retryable=true일 때만 재시도한다 |
 
 설정된 model_version/policy_version은 meta에 존재하고 정확히 같아야 한다.
 설정이 없으면 meta에서 받은 버전을 보존한다. meta는 한 번만 허용한다.
@@ -85,6 +87,8 @@ done과 EOF를 모두 확인한 뒤에만 결과를 반환한다. done 이후의
 `AnalysisStreamError.retryable`로 호출자가 재시도 여부를 판단한다.
 
 - HTTP 429/5xx, timeout과 전송 실패, done 없는 EOF/미완성 프레임 EOF: true.
+- HTTP409는 크기 제한된 detail.code=IDEMPOTENCY_IN_PROGRESS만 같은 키로 재시도한다.
+  IDEMPOTENCY_KEY_REUSED/IDEMPOTENCY_FAILED 및 알 수 없는 코드·손상 응답은 재시도하지 않는다.
 - HTTP 401/422 및 나머지 비정상 HTTP, redirect, 잘못된 URL·요청·응답 계약: false.
 - error 이벤트는 위의 명시적 retryable 값에 따른다. 잘못된 타입은 계약 오류이다.
 
@@ -103,14 +107,12 @@ PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_analysis_stream.py
 .venv/bin/ruff check src/review_data/core/analysis_stream.py tests/test_analysis_stream.py
 ```
 
-독립 테스트 146개 통과, 담당 Python 파일의 Ruff 검사·형식 검사 통과.
-코드 주석과 docstring은 한국어로 확인했다. 원격 호출과 DB 검증은 수행하지 않았다.
+독립 SSE 테스트 185개, PostgreSQL 포함 전체 526개 통과.
+토큰·본문·오류 원문을 출력하지 않는다.
 
+## 운영 계약 출처
 
-## 실제 예시 수신 후 확인할 항목
-
-analysis_job_id의 JSON 타입(현재 클라이언트는 정수), done 건수 필드명(result_count),
-모델·정책 버전 필드와 progress/heartbeat/error의 실제 payload를 확인한다.
-이벤트 예시가 확인되기 전에는 운영 호환이나 실연동 성공으로 표시하지 않는다.
-현재 알려진 모델은 ptext-koelectra-v1-2epoch-20260929다. AI가 점수 가중치와 등급을
-계산하고 Data는 반환된 최종 점수·레벨·이유를 저장한다.
+[AI 운영 연동 문서](https://github.com/FireViewLab/review-ai-db/blob/2346111/docs/data-analysis-stream.md)를 따른다.
+계산 모델은 ptext-koelectra-v1-2epoch-20260929, 정책은 rti-v0다. AI가 가중치와 등급을
+계산하고 Data는 최종 점수·레벨·이유를 저장한다. -1은 null, 0은 0으로 보존한다.
+AI는 RUNNING/FAILED 자동 회수를 제공하지 않는다. 재시도 상한에 도달하면 운영 확인이 필요하다.
