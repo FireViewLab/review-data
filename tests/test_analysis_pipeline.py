@@ -346,7 +346,9 @@ async def test_mock_http_stream_to_persisted_database(session_factory, monkeypat
 
     def handler(request):
         body = json.loads(request.content)
-        assert request.headers["x-analysis-job-id"] == str(job)
+        assert request.headers["x-request-id"] == str(job)
+        assert request.headers["idempotency-key"] == str(job)
+        assert "x-analysis-job-id" not in request.headers
         assert request.headers["x-internal-token"] == "private-token"
         assert all("author" not in r for r in body["reviews"])
         content = event("meta", {"analysis_job_id": job, "model_version": "v1"})

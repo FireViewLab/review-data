@@ -146,9 +146,10 @@ async def test_request_and_normalized_result(mock_http):
     assert request.headers["accept"] == "text/event-stream"
     assert request.headers["x-internal-token"] == "private-token"
     assert "authorization" not in request.headers
-    assert request.headers["x-analysis-job-id"] == "7"
-    assert request.headers["x-input-hash"] == "hash123"
-    assert request.headers["idempotency-key"] == "analysis:7:hash123"
+    assert request.headers["x-request-id"] == "7"
+    assert request.headers["idempotency-key"] == "7"
+    assert "x-analysis-job-id" not in request.headers
+    assert "x-input-hash" not in request.headers
     assert mock_http.clients[0].timeout.read == 17
     assert mock_http.clients[0].follow_redirects is False
     assert mock_http.clients[0].is_closed and stream.closed
@@ -493,3 +494,18 @@ async def test_unsupported_endpoint_is_not_retryable(mock_http):
         await analyze()
     assert not exc.value.retryable
     assert mock_http.clients[0].is_closed
+
+
+async def test_retries_keep_data_job_identity_and_new_jobs_use_new_keys(mock_http):
+    mock_http(complete())
+    first = await analyze()
+    replayed = await analyze()
+    assert first == replayed
+    keys = [r.headers["idempotency-key"] for r in mock_http.requests]
+    assert keys == ["7", "7"]
+    mock_http(complete(meta={"analysis_job_id": 8}, done={"analysis_job_id": 8, "result_count": 1}))
+    await AnalysisStreamClient(URL).analyze("naver", "p1", REVIEWS, 8, "hash123")
+    assert mock_http.requests[-1].headers["idempotency-key"] == "8"
+    assert all(
+        r.headers["x-request-id"] == r.headers["idempotency-key"] for r in mock_http.requests
+    )
