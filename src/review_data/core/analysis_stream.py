@@ -243,9 +243,8 @@ class AnalysisStreamClient:
         payload = _reviews(reviews)
         headers = {
             "Accept": "text/event-stream",
-            "X-Analysis-Job-ID": str(job_id),
-            "X-Input-Hash": input_hash,
-            "Idempotency-Key": f"analysis:{job_id}:{input_hash}",
+            "X-Request-ID": str(job_id),
+            "Idempotency-Key": str(job_id),
         }
         if self.token is not None:
             headers["X-Internal-Token"] = self.token

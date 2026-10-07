@@ -255,10 +255,14 @@ class MusinsaCollector(BrowserCollector):
 - `GET /api/v1/analysis-jobs/{job_id}`로 작업 상태를 조회한다. 조회 API에는 `X-Internal-Token`이 필요하다.
 - 점수 없음은 `null`이며 점수 `0`은 그대로 보존한다. 응답 레벨·이유는 AI 결과를 사용한다.
 
-기본 `AI_ANALYSIS_ENABLED=false`다. AI URL·인증·SSE 계약이 확정되어야 활성화한다.
+기본 `AI_ANALYSIS_ENABLED=false`다. 합의된 신규 URL은
+`https://ai.re-view.kr/api/v1/data/analyze/stream`이다. endpoint 구현·인증 토큰·실제
+SSE JSON 예시 확인과 소규모 검증 후 활성화한다.
 현재 운영 JSON `/api/v1/data/analyze`를 SSE URL로 그대로 지정하면 안 된다.
-[제안 SSE 계약](docs/projects/review-data/specs/2026-10-07-analysis-stream-contract.md)을 담당자와 확인한다.
-서버 `.env`에 `AI_STREAM_URL`, 필요 시 `AI_INTERNAL_TOKEN`,
+[합의 SSE 계약](docs/projects/review-data/specs/2026-10-07-analysis-stream-contract.md)을 담당자와 확인한다.
+요청의 `X-Request-ID`와 `Idempotency-Key`는 같은 Data 분석 job ID를 사용한다.
+AI 내부 `X-Analysis-Job-ID`와 구분하고 재시도에도 Data ID를 유지한다.
+서버 `.env`에 `AI_STREAM_URL`, 인증용 `AI_INTERNAL_TOKEN`,
 `AI_MODEL_VERSION`·`AI_POLICY_VERSION`을 설정하고 `AI_ANALYSIS_ENABLED=true`로 전환한다.
 토큰은 채팅·로그에 출력하지 않는다. 설정 변경 후 다음과 같이 적용한다.
 

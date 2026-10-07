@@ -4,7 +4,8 @@
 
 수집 워커는 리뷰 저장·분석 예약을 한 트랜잭션으로 처리한다. 별도 분석 워커가
 저장된 스냅샷을 POST하고 SSE를 수신하여 완료된 결과만 원자적으로 게시한다.
-수집 공용 모델은 유지한다. 실제 AI endpoint와 이벤트 계약은 담당자 확정 전이다.
+수집 공용 모델은 유지한다. AI 운영 URL·신규 endpoint·이벤트 종류와 Data job ID 계약은 합의했다.
+실제 이벤트 JSON 예시·토큰·신규 endpoint 구현과 실연동 검증은 대기 중이다.
 기본 AI_ANALYSIS_ENABLED=false로 배포하며 외부 자동 호출은 비활성 상태를 유지한다.
 
 ## 입력·작업·결과
@@ -38,7 +39,9 @@ GET /api/v1/analysis-jobs/{job_id}는 원본 입력·토큰을 제외한 상태�
 상태는 disabled/not_analyzed/queued/running/done/failed/stale이다.
 전체 count와 현재 페이지 results를 구분한다. 실패한 run과 입력이 바뀐 run은 게시하지 않는다.
 crawler analysis-backfill은 활성화 이후 기존 DB 상품을 예약한다. 자동 호출 활성화는
-실제 AI URL·인증·SSE 예시를 확인한 뒤 진행한다.
+https://ai.re-view.kr/api/v1/data/analyze/stream의 구현·토큰·실제 SSE 예시를
+확인하고 상품 하나로 검증한 뒤 진행한다. X-Request-ID와 Idempotency-Key는
+같은 Data job ID이며 AI 내부 작업 ID와 구분한다.
 
 ## 검증
 

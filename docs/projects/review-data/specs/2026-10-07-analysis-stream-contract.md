@@ -1,11 +1,13 @@
-# 분석 SSE 계약 제안과 HTTP 클라이언트
+# 분석 SSE 합의 계약과 HTTP 클라이언트
 
 ## 상태와 범위
 
-**Data 측 제안이며 동환님 확정 대기 중이다.** 다른 저장소에 SSE 코드가 있다는 사실만으로
-이 이벤트·인증·상관 정보 계약이 운영 서버와 호환된다고 판단하지 않는다.
-실제 분석 서버를 호출하지 않는다. 운영 분석 워커는 기본 비활성으로 유지하며,
-활성화·저장·배포 절차는 분석 파이프라인 문서를 따른다.
+담당자와 POST 저장 리뷰 → 응답 SSE 방향 및 요청 식별자 계약을 합의했다.
+운영 base URL은 https://ai.re-view.kr이며 신규 POST /api/v1/data/analyze/stream을
+AI 서버에서 구현한다. 기존 POST /api/v1/data/analyze JSON API는 유지한다.
+실제 이벤트 JSON 예시·인증 토큰 전달과 소규모 연동 검증은 대기 중이다.
+운영 분석 워커는 기본 비활성으로 유지한다. 활성화·저장·배포 절차는
+분석 파이프라인 문서를 따른다.
 
 `core/analysis_stream.py`는 HTTP 스트림 경계 검증을 담당한다.
 기존 JSON 초안을 재사용하거나 기존 Product/Review 계약을 변경하지 않는다.
@@ -30,11 +32,15 @@ url은 전체 endpoint이며 경로를 추가하지 않는다. POST JSON body는
 
 - `Accept: text/event-stream`
 - token이 있을 때만 `X-Internal-Token: <token>`
-- `X-Analysis-Job-ID: <job_id>`
-- `X-Input-Hash: <input_hash>`
-- `Idempotency-Key: analysis:<job_id>:<input_hash>`
+- `X-Request-ID: <Data analysis_job_id>`
+- `Idempotency-Key: <Data analysis_job_id>`
 
-같은 job과 입력 hash의 재시도는 같은 idempotency key를 사용한다. job_id는 양의 정수이며
+두 식별자 헤더는 같은 Data job ID의 십진수 문자열이다. 같은 job 재시도는 같은 key를
+사용한다. AI는 중복 분석을 막고 이미 완료된 결과는 SSE로 재전송한다. 입력·설정 버전이
+바뀌면 Data가 새 job ID를 발급한다. 입력 스냅샷·hash는 Data DB에 보존한다.
+AI 내부 작업용 X-Analysis-Job-ID는 Data에서 전송하지 않고 외부 연동 ID와 구분한다.
+meta/done의 analysis_job_id는 Data ID이며 AI 내부 작업 ID로 교체하면 안 된다.
+job_id는 양의 정수이며
 boolean은 거부한다. 버전 옵션은 body에 추가하지 않고 meta 검증에 사용한다.
 redirect는 따르지 않는다. HTTP 클라이언트·응답 스트림은 각 호출의 async context에서
 닫는다. timeout은 httpx의 연결·쓰기·읽기·풀 단계 timeout이며 총 실행시간 제한과 다르다.
@@ -51,7 +57,7 @@ UTF-8, LF/CRLF, 빈 줄 구분, 주석, 여러 data 줄을 처리한다. 여러 
 
 | 이벤트 | data 계약 |
 |---|---|
-| meta | `analysis_job_id` 필수, 요청 job_id와 동일한 정수. 선택적 `model_version`, `policy_version`은 null 또는 비어 있지 않은 문자열 |
+| meta | `analysis_job_id` 필수, 요청 job_id와 동일한 정수. `model_version`, `policy_version`을 제공한다. JSON 예시 수신 전에는 null·누락을 허용하며 설정 버전이 있으면 일치를 요구한다 |
 | result | `review_id`, `rti`, `level`, `text_score`, `behavior_score`, `network_score`, `reasons` 필수 |
 | heartbeat / progress | JSON object. 추가 업무 필드 의미는 추후 확정 |
 | done | `analysis_job_id`와 `result_count` 필수, 요청 job과 전체 입력 리뷰 수에 일치하는 정수 |
@@ -97,5 +103,14 @@ PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_analysis_stream.py
 .venv/bin/ruff check src/review_data/core/analysis_stream.py tests/test_analysis_stream.py
 ```
 
-독립 테스트 145개 통과, 담당 Python 파일의 Ruff 검사·형식 검사 통과.
+독립 테스트 146개 통과, 담당 Python 파일의 Ruff 검사·형식 검사 통과.
 코드 주석과 docstring은 한국어로 확인했다. 원격 호출과 DB 검증은 수행하지 않았다.
+
+
+## 실제 예시 수신 후 확인할 항목
+
+analysis_job_id의 JSON 타입(현재 클라이언트는 정수), done 건수 필드명(result_count),
+모델·정책 버전 필드와 progress/heartbeat/error의 실제 payload를 확인한다.
+이벤트 예시가 확인되기 전에는 운영 호환이나 실연동 성공으로 표시하지 않는다.
+현재 알려진 모델은 ptext-koelectra-v1-2epoch-20260929다. AI가 점수 가중치와 등급을
+계산하고 Data는 반환된 최종 점수·레벨·이유를 저장한다.
