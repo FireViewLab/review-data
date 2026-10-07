@@ -1,0 +1,101 @@
+# 분석 SSE 계약 제안과 HTTP 클라이언트
+
+## 상태와 범위
+
+**Data 측 제안이며 동환님 확정 대기 중이다.** 다른 저장소에 SSE 코드가 있다는 사실만으로
+이 이벤트·인증·상관 정보 계약이 운영 서버와 호환된다고 판단하지 않는다.
+실제 분석 서버를 호출하지 않는다. 운영 분석 워커는 기본 비활성으로 유지하며,
+활성화·저장·배포 절차는 분석 파이프라인 문서를 따른다.
+
+`core/analysis_stream.py`는 HTTP 스트림 경계 검증을 담당한다.
+기존 JSON 초안을 재사용하거나 기존 Product/Review 계약을 변경하지 않는다.
+
+## 인터페이스와 요청
+
+```python
+client = AnalysisStreamClient(
+    url, token=None, timeout=300, model_version=None, policy_version=None
+)
+result = await client.analyze(platform, product_id, reviews, job_id, input_hash)
+# result.results는 리뷰별 결과 사전의 목록이다.
+# result.model_version과 result.policy_version은 문자열 또는 None이다.
+```
+
+url은 전체 endpoint이며 경로를 추가하지 않는다. POST JSON body는
+`{platform, product_id, reviews: [{review_id, content, rating, written_at}]}`이다.
+본문의 공백과 원본 식별자를 변형하지 않는다. datetime은 ISO 8601 문자열로 보낸다.
+리뷰 목록·식별자·본문이 비어 있거나 요청 ID가 중복되면 전송 전에 거부한다.
+
+헤더:
+
+- `Accept: text/event-stream`
+- token이 있을 때만 `X-Internal-Token: <token>`
+- `X-Analysis-Job-ID: <job_id>`
+- `X-Input-Hash: <input_hash>`
+- `Idempotency-Key: analysis:<job_id>:<input_hash>`
+
+같은 job과 입력 hash의 재시도는 같은 idempotency key를 사용한다. job_id는 양의 정수이며
+boolean은 거부한다. 버전 옵션은 body에 추가하지 않고 meta 검증에 사용한다.
+redirect는 따르지 않는다. HTTP 클라이언트·응답 스트림은 각 호출의 async context에서
+닫는다. timeout은 httpx의 연결·쓰기·읽기·풀 단계 timeout이며 총 실행시간 제한과 다르다.
+자동 재시도는 하지 않는다.
+
+## SSE 프레임과 이벤트
+
+UTF-8, LF/CRLF, 빈 줄 구분, 주석, 여러 data 줄을 처리한다. 여러 data 줄은 LF로
+합쳐 JSON을 읽는다. 주석과 id/retry만 있는 프레임은 이벤트로 취급하지 않는다.
+첫 프레임의 UTF-8 BOM을 허용한다. 프레임 최대 크기는 구분 줄을 포함해 1MiB이다.
+초과 프레임·잘못된 UTF-8/JSON·중복 JSON 키·미완성 EOF는 실패한다.
+
+실제 첫 이벤트는 반드시 meta이다. 모든 이벤트 data는 JSON object이다.
+
+| 이벤트 | data 계약 |
+|---|---|
+| meta | `analysis_job_id` 필수, 요청 job_id와 동일한 정수. 선택적 `model_version`, `policy_version`은 null 또는 비어 있지 않은 문자열 |
+| result | `review_id`, `rti`, `level`, `text_score`, `behavior_score`, `network_score`, `reasons` 필수 |
+| heartbeat / progress | JSON object. 추가 업무 필드 의미는 추후 확정 |
+| done | `analysis_job_id`와 `result_count` 필수, 요청 job과 전체 입력 리뷰 수에 일치하는 정수 |
+| error | 항상 실패. 선택적 boolean `retryable`이 true일 때만 재시도 가능한 서버 오류로 분류 |
+
+설정된 model_version/policy_version은 meta에 존재하고 정확히 같아야 한다.
+설정이 없으면 meta에서 받은 버전을 보존한다. meta는 한 번만 허용한다.
+알 수 없는 이벤트나 meta 전의 업무 이벤트는 거부한다.
+
+점수는 JSON 숫자나 null만 허용한다. -1/null은 None으로 정규화하며 0은 보존한다.
+RTI와 component 점수는 유한한 0~100 숫자여야 한다. boolean·숫자 문자열·NaN·Infinity와
+그 밖의 음수는 거부한다. 숫자는 Decimal로 반환해 DB Numeric에 저장할 수 있게 한다.
+level은 safe/warn/danger/null, reasons는 문자열 배열이며 빈 배열을 허용한다.
+
+result review_id는 입력에 있어야 한다. 정규화한 최종 값이 같은 중복은 무시하고,
+다른 값의 중복은 실패한다. 결과 누락이나 외부 ID는 실패한다. done의 result_count는
+중복 이벤트 수가 아닌 전체 입력 리뷰 수이다. 반환 results는 입력 리뷰 순서이다.
+
+done과 EOF를 모두 확인한 뒤에만 결과를 반환한다. done 이후의 비어 있지 않은 프레임은
+주석 프레임을 포함해 거부한다. 완료 프레임 뒤 빈 구분 줄은 허용한다. 완료된 done 뒤에도
+연결 오류나 timeout이 나면 성공으로 반환하지 않는다. 부분 결과를 DB에 저장하지 않는다.
+
+## 오류 분류
+
+`AnalysisStreamError.retryable`로 호출자가 재시도 여부를 판단한다.
+
+- HTTP 429/5xx, timeout과 전송 실패, done 없는 EOF/미완성 프레임 EOF: true.
+- HTTP 401/422 및 나머지 비정상 HTTP, redirect, 잘못된 URL·요청·응답 계약: false.
+- error 이벤트는 위의 명시적 retryable 값에 따른다. 잘못된 타입은 계약 오류이다.
+
+취소는 상위 task에 그대로 전달하면서 자원을 닫는다. 토큰·원본 본문·서버 오류 본문을
+로그로 남기지 않는다. 응답의 부분 결과는 실패 시 반환하지 않는다.
+
+## 독립 검증
+
+httpx MockTransport/AsyncByteStream으로 임의 청크 경계, CRLF·주석·여러 data 줄,
+프레임 크기, EOF, 정상 결과와 null/-1/0, 버전·job 상관 검증, 중복·누락·외부 ID,
+잘못된 JSON·알 수 없는 이벤트·done 뒤 프레임, HTTP 오류·timeout·자원 정리를 확인한다.
+실제 서버·DB는 호출하지 않는다.
+
+```sh
+PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_analysis_stream.py
+.venv/bin/ruff check src/review_data/core/analysis_stream.py tests/test_analysis_stream.py
+```
+
+독립 테스트 145개 통과, 담당 Python 파일의 Ruff 검사·형식 검사 통과.
+코드 주석과 docstring은 한국어로 확인했다. 원격 호출과 DB 검증은 수행하지 않았다.

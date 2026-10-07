@@ -242,3 +242,34 @@ class MusinsaCollector(BrowserCollector):
 브라우저는 collector 당 1개만 띄우고 재사용합니다. 페이지가 필요할 때마다 `self.page()` 컨텍스트를 쓰면 블록을 벗어날 때 자동으로 닫힙니다.
 
 브라우저 기반 collector 는 수집마다 Chromium 을 띄우므로, 워커에서 동시 실행 수를 따로 제한합니다(기본 1건). 설정값은 `core/settings.py` 의 `max_concurrent_browser_jobs_per_platform` 입니다.
+
+### 저장된 리뷰 분석
+
+수집 워커는 리뷰 저장과 분석 작업 예약을 같은 트랜잭션으로 처리한다.
+독립 `analysis-worker`가 저장된 입력을 AI에 POST하고 SSE를 검증한다.
+모든 리뷰 결과와 `done`·정상 스트림 종료를 확인한 뒤 결과 저장과 완료를 함께 커밋한다.
+입력이 바뀐 분석 결과는 `stale`로 처리하고 조회 결과에 포함하지 않는다.
+
+- 상품 조회의 `analysis`와 `GET /api/v1/{platform}/products/{product_id}/analysis`로 상태와 결과를 조회한다.
+- 결과 조회의 `limit`·`cursor`는 리뷰 페이지와 같으며 `review_count`는 입력 전체 건수다.
+- `GET /api/v1/analysis-jobs/{job_id}`로 작업 상태를 조회한다. 조회 API에는 `X-Internal-Token`이 필요하다.
+- 점수 없음은 `null`이며 점수 `0`은 그대로 보존한다. 응답 레벨·이유는 AI 결과를 사용한다.
+
+기본 `AI_ANALYSIS_ENABLED=false`다. AI URL·인증·SSE 계약이 확정되어야 활성화한다.
+현재 운영 JSON `/api/v1/data/analyze`를 SSE URL로 그대로 지정하면 안 된다.
+[제안 SSE 계약](docs/projects/review-data/specs/2026-10-07-analysis-stream-contract.md)을 담당자와 확인한다.
+서버 `.env`에 `AI_STREAM_URL`, 필요 시 `AI_INTERNAL_TOKEN`,
+`AI_MODEL_VERSION`·`AI_POLICY_VERSION`을 설정하고 `AI_ANALYSIS_ENABLED=true`로 전환한다.
+토큰은 채팅·로그에 출력하지 않는다. 설정 변경 후 다음과 같이 적용한다.
+
+```sh
+docker compose up -d --no-build --no-deps --force-recreate api worker analysis-worker
+docker compose exec -T analysis-worker crawler analysis-backfill
+```
+
+`analysis-backfill`은 기존 상품의 저장 리뷰를 예약하며 같은 입력·버전은 재사용한다.
+같은 입력도 다시 분석하려면 `--force`를 명시한다. 버전 변경은 기존 결과를 stale로 처리한다.
+500개 초과 리뷰는 분할 계약 확정 전까지 분석 실패로 기록하고 AI에 전송하지 않는다.
+429·5xx·타임아웃·스트림 끊김은 최대 3회 재시도하며 인증·계약 오류는 즉시 실패한다.
+오류에는 원본 입력·토큰을 기록하지 않는다. 운영 상세는
+[분석 파이프라인](docs/projects/review-data/specs/2026-10-07-analysis-pipeline.md)을 참고한다.

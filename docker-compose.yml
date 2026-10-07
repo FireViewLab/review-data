@@ -78,6 +78,15 @@ services:
     stop_signal: SIGINT
     mem_limit: 2g
 
+  analysis-worker:
+    <<: *app
+    command: ["crawler", "analysis-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_signal: SIGINT
+    mem_limit: 256m
+
   # 조회가 없어도 낡은 상품을 다시 수집하도록 job 을 예약한다. 크롤링은 worker 가 한다.
   scheduler:
     <<: *app
