@@ -31,7 +31,7 @@ partial은 상품과 리뷰의 성공 여부를 따로 확인한다. 실패 또�
 코드의 SSE 존재만으로 현재 운영 경로라고 판단하지 않는다. 분석 job의 호출 주체,
 배포된 서버·엔드포인트·인증 및 결과 저장 주체를 확인한 뒤 구현을 연결한다.
 기존 JSON 초안은 보존한다. 합의된 Data POST → AI SSE 방향의 별도 파이프라인을
-구현하며 실제 URL·인증·이벤트 계약 확정 전에는 AI_ANALYSIS_ENABLED=false로 운영한다.
+구현하며 실제 이벤트 예시·인증 토큰·신규 endpoint 검증 전에는 AI_ANALYSIS_ENABLED=false로 운영한다.
 review-ai-db는 X-Internal-Token 인증을 사용하고 한 요청 최대 500개 리뷰를 받는다.
 점수 미제공은 -1, level은 null로 반환한다. Data DB의 nullable 점수로 변환하는
 정규화 규칙을 명시해야 하며 -1을 유효 점수나 평균에 포함하지 않는다.
@@ -45,7 +45,9 @@ Data 상품 응답은 analysis 상태·페이지 결과를 제공한다. Spring 
 - 실패한 분석을 완료 알림이나 정상 결과로 처리하지 않는다.
 - 완료된 결과를 analysis 응답과 화면에 연결한다.
 
-분석 서버의 URL·인증·이벤트 예시는 미확정이다. Data가 저장된 리뷰를 POST하고
+담당자가 https://ai.re-view.kr과 X-Internal-Token 인증을 확인했다.
+신규 POST /api/v1/data/analyze/stream과 Data job ID를 X-Request-ID·Idempotency-Key에
+같이 전달하는 계약을 합의했다. AI 구현·실제 이벤트 예시·인증 토큰은 대기 중이다. Data가 저장된 리뷰를 POST하고
 응답 SSE를 받는 방향으로 합의하였다. 확정 전에는 자동 호출을 활성화하지 않는다.
 구현·운영 방법은 analysis-pipeline 및 analysis-stream-contract 문서를 따른다.
 
