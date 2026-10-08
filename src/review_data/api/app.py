@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -40,6 +40,7 @@ from review_data.core.db.base import create_engine, create_session_factory
 from review_data.core.discovery import LoadFailure, discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.models import Review
+from review_data.core.service.catalog import register_search_products
 from review_data.core.settings import get_settings
 
 _INTERNAL_TOKEN_HEADER = APIKeyHeader(
@@ -224,14 +225,23 @@ async def platforms() -> dict:
     "/{platform}/search",
     tags=[docs.TAG_DIRECT],
     summary="상품 검색",
-    description="키워드로 쇼핑몰을 바로 검색한다. 저장하지 않는다.",
+    description="쇼핑몰을 검색하고 새 상품을 등록한다. 큐 상한 안에서 리뷰 수집을 예약한다.",
     responses=docs.AUTH_ERROR,
 )
-async def search(platform: str, keyword: str, limit: int = 20):
+async def search(
+    request: Request,
+    platform: str,
+    keyword: Annotated[str, Query(min_length=1, max_length=100)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+):
     collector_cls = _get_collector_cls(platform)
     try:
         async with collector_cls() as collector:
-            return await collector.search_products(keyword, limit=limit)
+            products = list(await collector.search_products(keyword, limit=limit))[:limit]
+        async with request.app.state.session_factory() as session:
+            await register_search_products(session, platform, products, get_settings())
+            await session.commit()
+        return products
     except Exception as exc:  # noqa: BLE001
         raise _to_http_error(exc) from exc
 

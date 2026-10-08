@@ -284,3 +284,16 @@ docker compose exec -T analysis-worker crawler analysis-backfill
 같은 키로 최대 3회 재시도하며 인증·계약 오류는 즉시 실패한다.
 오류에는 원본 입력·토큰을 기록하지 않는다. 운영 상세는
 [분석 파이프라인](docs/projects/review-data/specs/2026-10-07-analysis-pipeline.md)을 참고한다.
+
+### 검색 상품 등록·분석 목록
+
+`GET /{platform}/search?keyword=...&limit=20`은 검색 결과의 새 상품을 등록하고
+큐 상한 안에서 수집을 예약한다. 상한 밖의 상품도 등록해 스케줄러가 이어서 처리한다.
+기존 상세는 검색 결과로 덮지 않으며 플랫폼 제외·실패 대기를 유지한다.
+
+`GET /api/v1/catalog?limit=100&cursor=...`은 내부 토큰을 요구하고 등록 상품과
+최신 분석 상태·실제 평균 RTI·표본 범위를 페이지로 제공한다. NULL은 평균에서 제외하고
+0은 포함하며 미완료·stale 점수는 제공하지 않는다. Spring은 이를 주기적으로 동기화한다.
+
+[카탈로그 연결](docs/projects/review-data/specs/2026-10-09-analysis-catalog.md)과
+[리뷰 전송·분포 기준](docs/projects/review-data/specs/2026-10-09-review-analysis-selection.md)을 참고한다.
