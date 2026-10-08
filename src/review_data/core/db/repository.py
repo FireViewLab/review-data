@@ -87,6 +87,32 @@ class ProductRepository:
     async def get(self, platform: str, product_id: str) -> ProductRow | None:
         return await self.session.get(ProductRow, (platform, product_id))
 
+    async def insert_search_product(self, product: Product) -> bool:
+        """동시 상세 수집이 먼저 저장했으면 검색 정보로 덮지 않는다."""
+        values = product.model_dump(
+            include={
+                "platform",
+                "product_id",
+                "name",
+                "url",
+                "brand",
+                "manufacturer",
+                "seller",
+                "price",
+                "thumbnail_url",
+                "category",
+                "review_count",
+                "rating",
+            }
+        )
+        stmt = (
+            pg_insert(ProductRow)
+            .values(**values, last_collected_at=datetime.now(UTC))
+            .on_conflict_do_nothing(index_elements=["platform", "product_id"])
+            .returning(ProductRow.product_id)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none() is not None
+
     async def upsert(self, product: Product) -> None:
         values = {
             "name": product.name,
