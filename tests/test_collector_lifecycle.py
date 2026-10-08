@@ -233,7 +233,7 @@ async def test_search_api_maps_unsupported_and_browser_errors(
     monkeypatch.setattr(api, "_get_collector_cls", lambda _: lambda: collector_cls(settings()))
     resources.pw.chromium.launch.side_effect = PlaywrightError("launch unavailable")
     with pytest.raises(HTTPException) as caught:
-        await api.search(platform, "test")
+        await api.search(None, platform, "test")
     assert caught.value.status_code == status
     if platform == "naver":
         resources.start.assert_not_awaited()

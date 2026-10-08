@@ -16,6 +16,7 @@ from review_data.api import docs
 from review_data.core.db.analysis_repository import AnalysisRepository, public_job
 from review_data.core.db.models import AnalysisJob, CollectionJob, ProductRow, ReviewRow
 from review_data.core.db.repository import InvalidCursorError, ReviewRepository
+from review_data.core.service.catalog import catalog_page
 from review_data.core.service.collection import CollectionResult, CollectionService
 from review_data.core.settings import get_settings
 
@@ -29,6 +30,25 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+@router.get("/catalog", tags=[docs.TAG_PRODUCTS], summary="저장 상품·분석 요약 목록")
+async def get_catalog(
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    cursor: str | None = None,
+) -> dict:
+    try:
+        items, next_cursor = await catalog_page(session, get_settings(), limit, cursor)
+    except ValueError as exc:
+        raise _api_error(400, "INVALID_CURSOR", str(exc)) from exc
+    return {
+        "items": [
+            {"product": _serialize_product(product), "analysis": analysis}
+            for product, analysis in items
+        ],
+        "next_cursor": next_cursor,
+    }
 
 
 def _api_error(status_code: int, code: str, message: str, detail: object = None) -> HTTPException:
