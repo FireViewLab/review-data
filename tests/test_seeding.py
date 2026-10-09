@@ -169,14 +169,15 @@ async def test_setup_failure_does_not_stop_other_platform_or_direct_job(session_
 
 
 async def test_database_failure_rolls_back_only_one_keyword(session_factory, monkeypatch):
-    original = ProductRepository.upsert
+    original = ProductRepository.insert_search_product
 
     async def fail_after_insert(self, product):
-        await original(self, product)
+        inserted = await original(self, product)
         if product.name == "저장실패":
             raise RuntimeError("DB 실패")
+        return inserted
 
-    monkeypatch.setattr(ProductRepository, "upsert", fail_after_insert)
+    monkeypatch.setattr(ProductRepository, "insert_search_product", fail_after_insert)
     results = await SeedingService({PLATFORM: _Collector}, session_factory, SETTINGS).run(
         SeedPlan(20, {PLATFORM: ("저장실패", "정상")}, {})
     )

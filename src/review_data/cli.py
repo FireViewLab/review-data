@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -23,12 +24,39 @@ from review_data.core.db.base import create_engine, create_session_factory, sess
 from review_data.core.db.repository import ProductRepository, ReviewRepository
 from review_data.core.discovery import discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
+from review_data.core.service.product_discovery import ProductDiscoveryService
 from review_data.core.service.scheduling import SchedulingService
 from review_data.core.service.seeding import SeedingService, load_seed_file
 from review_data.core.settings import ENV_FILE, env_file_exists, get_settings
 from review_data.worker import collection_worker
 
 app = typer.Typer(help="커머스 리뷰 수집 도구", no_args_is_help=True)
+
+
+@app.command("status")
+def status_command():
+    """수집·분석 큐, 만료 lease, 리뷰0건 원인, 신규 발굴 위치를 JSON으로 확인합니다."""
+    _require_env()
+    asyncio.run(_status())
+
+
+async def _status():
+    from review_data.core.service.operations import operational_status
+
+    engine = create_engine()
+    try:
+        async with create_session_factory(engine)() as session:
+            result = await operational_status(session)
+            settings = get_settings()
+            result["discovery_settings"] = {
+                "enabled": settings.discovery_enabled,
+                "interval_seconds": settings.discovery_interval_seconds,
+                "max_collection_pending": settings.schedule_max_pending,
+                "max_analysis_pending": settings.discovery_max_analysis_pending,
+            }
+            typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    finally:
+        await engine.dispose()
 
 
 def _require_env() -> None:
@@ -303,8 +331,19 @@ async def _run_scheduler(once: bool, interval: float | None) -> None:
     wait = interval if interval is not None else get_settings().schedule_interval_seconds
     engine = create_engine()
     session_factory = create_session_factory(engine)
+    settings = get_settings()
+    registry = _load_registry() if settings.discovery_enabled else {}
+    discovery_service = ProductDiscoveryService(session_factory, registry, settings)
     try:
         while True:
+            try:
+                result = await discovery_service.run_once()
+                if result["attempted"]:
+                    logger.info("신규 발굴 %s", result)
+            except Exception:
+                if once:
+                    raise
+                logger.exception("신규 발굴 오류. 기존 상품 갱신은 계속합니다.")
             try:
                 async with session_factory() as session:
                     result = await SchedulingService(session).run_once()
