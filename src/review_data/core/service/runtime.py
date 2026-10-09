@@ -65,13 +65,14 @@ class ResourceSampler:
 
     def sample(self):
         result = {
-            "scope": "host" if str(self.proc) == "/host/proc" else "local",
+            "scope": "host" if (self.proc / "stat").exists() else "local",
             "cpu_percent": None,
             "memory": None,
             "load": None,
             "disk": None,
         }
         try:
+            # Linux /proc의 CPU·메모리 총계는 Docker cgroup 한도가 아닌 호스트 값이다.
             # guest/guest_nice는 user/nice에 이미 포함된다.
             ticks = [int(x) for x in (self.proc / "stat").read_text().splitlines()[0].split()[1:9]]
             total, idle = sum(ticks), ticks[3] + ticks[4]
