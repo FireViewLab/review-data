@@ -1,0 +1,1249 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Re:view · Data 운영</title>
+    <style>
+      :root {
+        --bg: #f4f6fa;
+        --ink: #172132;
+        --muted: #728097;
+        --line: #e6ebf2;
+        --blue: #3267e3;
+        --green: #19836c;
+        --red: #c64b58;
+        --orange: #bb7b20;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.55 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      aside {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: 216px;
+        background: #142036;
+        color: #a7b4cd;
+        padding: 32px 20px;
+        display: flex;
+        flex-direction: column;
+        z-index: 5;
+      }
+      .brand {
+        font-size: 25px;
+        font-weight: 800;
+        color: white;
+        letter-spacing: -1px;
+      }
+      .brand em {
+        font-style: normal;
+        color: #75a0ff;
+      }
+      .brand small {
+        display: block;
+        font-size: 11px;
+        letter-spacing: 2px;
+        font-weight: 500;
+        color: #879ab8;
+        margin: 5px 0 38px;
+      }
+      .nav {
+        border: 0;
+        background: none;
+        text-align: left;
+        padding: 12px 16px;
+        border-radius: 9px;
+        color: inherit;
+        margin: 3px 0;
+      }
+      .nav.active {
+        background: #263854;
+        color: white;
+      }
+      .nav span {
+        display: inline-block;
+        width: 27px;
+      }
+      .sidebar-foot {
+        margin-top: auto;
+        font-size: 11px;
+        color: #8093b1;
+        padding: 16px;
+      }
+      main {
+        margin-left: 216px;
+        padding: 32px 38px;
+        max-width: 1740px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 26px;
+      }
+      h1 {
+        font-size: 25px;
+        letter-spacing: -0.8px;
+        margin: 0;
+      }
+      p {
+        margin: 5px 0;
+        color: var(--muted);
+      }
+      .tools {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        display: inline-block;
+        background: var(--green);
+        margin-right: 7px;
+      }
+      .btn {
+        border: 1px solid var(--line);
+        background: white;
+        border-radius: 7px;
+        padding: 8px 12px;
+        color: var(--ink);
+      }
+      .btn.primary {
+        background: var(--blue);
+        color: white;
+        border-color: var(--blue);
+      }
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+      .card,
+      .panel {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 21px;
+        box-shadow: 0 3px 10px #14203603;
+      }
+      .label {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .value {
+        font-size: 28px;
+        font-weight: 750;
+        letter-spacing: -0.7px;
+      }
+      .sub {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 7px;
+      }
+      .panel h2 {
+        font-size: 15px;
+        margin: 0 0 18px;
+        font-weight: 650;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 18px;
+        margin-bottom: 20px;
+      }
+      .bar {
+        height: 5px;
+        background: #eef1f7;
+        border-radius: 5px;
+        margin-top: 13px;
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        background: var(--blue);
+        border-radius: 5px;
+      }
+      .section-title {
+        font-size: 11px;
+        letter-spacing: 1px;
+        color: var(--muted);
+        margin: 22px 0 12px;
+      }
+      .pill {
+        font-size: 11px;
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 5px;
+        background: #edf1f7;
+        color: #61728b;
+        white-space: nowrap;
+      }
+      .pill.done,
+      .pill.succeeded,
+      .pill.alive {
+        background: #e8f6f0;
+        color: var(--green);
+      }
+      .pill.running {
+        background: #eaf0ff;
+        color: var(--blue);
+      }
+      .pill.failed,
+      .pill.offline {
+        background: #fcecef;
+        color: var(--red);
+      }
+      .pill.pending,
+      .pill.queued,
+      .pill.partial {
+        background: #fff4e1;
+        color: var(--orange);
+      }
+      .worker {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .worker:last-child {
+        border: 0;
+      }
+      .worker strong {
+        font-size: 12px;
+      }
+      .worker small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .filter {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin: 0 0 16px;
+      }
+      input,
+      select {
+        padding: 9px 11px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: white;
+        color: var(--ink);
+      }
+      input:focus,
+      select:focus {
+        outline: 2px solid #b9cef9;
+      }
+      input.search {
+        min-width: 260px;
+        flex: 1;
+      }
+      .table-wrap {
+        overflow: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 12px;
+        text-align: left;
+      }
+      th {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+        background: #f9fafc;
+        padding: 10px 12px;
+        white-space: nowrap;
+      }
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 12px;
+        vertical-align: top;
+      }
+      td.product {
+        max-width: 320px;
+      }
+      td.product strong {
+        display: block;
+        font-size: 12px;
+        font-weight: 550;
+      }
+      td.product small {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      tbody tr:hover {
+        background: #fafcff;
+      }
+      .link {
+        border: 0;
+        background: none;
+        color: var(--blue);
+        padding: 0;
+        font-size: 12px;
+      }
+      .foot {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 16px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .notice {
+        background: #fff5e5;
+        border: 1px solid #ffe1b1;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 18px;
+        color: #866028;
+        font-size: 12px;
+      }
+      .error {
+        color: var(--red);
+      }
+      .empty {
+        padding: 30px;
+        text-align: center;
+        color: var(--muted);
+      }
+      svg {
+        width: 100%;
+        height: 180px;
+      }
+      .legend {
+        display: flex;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .legend b {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        margin-right: 5px;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: #14203670;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .dialog {
+        background: white;
+        width: 1080px;
+        max-width: 100%;
+        max-height: 90vh;
+        border-radius: 14px;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 20px 100px #14203640;
+      }
+      .dialog-head {
+        padding: 22px 26px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .dialog-head h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .dialog-body {
+        padding: 22px 26px;
+        overflow: auto;
+      }
+      .detail-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 24px;
+        margin-bottom: 18px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .review {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin: 12px 0;
+        overflow: hidden;
+      }
+      .review-head {
+        background: #f7f9fc;
+        padding: 9px 14px;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .review-cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+      .review-cols > div {
+        padding: 15px;
+        min-width: 0;
+      }
+      .review-cols > div + div {
+        border-left: 1px solid var(--line);
+      }
+      .review-content {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        max-height: 250px;
+        overflow: auto;
+      }
+      .scores {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin: 8px 0;
+      }
+      .scores span {
+        background: #f1f4fa;
+        border-radius: 5px;
+        padding: 5px 9px;
+        font-size: 11px;
+      }
+      .login-dialog {
+        width: 390px;
+        padding: 30px;
+      }
+      .login-dialog input {
+        width: 100%;
+        margin: 16px 0 12px;
+      }
+      .login-dialog .btn {
+        width: 100%;
+      }
+      .login-dialog h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .login-dialog .sub {
+        line-height: 1.7;
+      }
+      .spinner {
+        color: var(--muted);
+        padding: 25px;
+      }
+      .platform-stat {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+      }
+      .mini-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 7px 0;
+        font-size: 12px;
+      }
+      .timeline-note {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 12px;
+      }
+      @media (max-width: 1100px) {
+        aside {
+          width: 175px;
+        }
+        main {
+          margin-left: 175px;
+          padding: 25px;
+        }
+        .cards {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 700px) {
+        aside {
+          position: static;
+          width: auto;
+          padding: 16px;
+          display: block;
+        }
+        .brand small,
+        .sidebar-foot {
+          display: none;
+        }
+        .brand {
+          font-size: 20px;
+        }
+        .nav {
+          display: inline-block;
+          padding: 9px;
+          font-size: 12px;
+        }
+        .nav span {
+          display: none;
+        }
+        main {
+          margin: 0;
+          padding: 18px;
+        }
+        header {
+          align-items: flex-start;
+        }
+        .tools {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 7px;
+        }
+        .cards {
+          gap: 10px;
+        }
+        .card,
+        .panel {
+          padding: 16px;
+        }
+        .value {
+          font-size: 24px;
+        }
+        .review-cols {
+          grid-template-columns: 1fr;
+        }
+        .review-cols > div + div {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+        .modal {
+          padding: 10px;
+        }
+        .mini-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <div class="brand">Re:<em>view</em><small>DATA OPERATIONS</small></div>
+      <button class="nav active" data-tab="overview">
+        <span>◈</span> 운영 개요</button
+      ><button class="nav" data-tab="collection">
+        <span>↓</span> 리뷰 수집</button
+      ><button class="nav" data-tab="analysis"><span>↗</span> AI 분석</button
+      ><button class="nav" data-tab="products">
+        <span>▦</span> 상품 데이터
+      </button>
+      <div class="sidebar-foot">
+        Data 서버 운영 모니터<br />수집 → 저장 → 분석 → 결과
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <h1 id="page-title">운영 개요</h1>
+          <p id="page-desc">서버와 데이터 파이프라인의 현재 상태</p>
+        </div>
+        <div class="tools">
+          <span id="connection"><i class="dot"></i>연결 중</span
+          ><span id="updated">—</span
+          ><button class="btn" id="refresh">새로고침</button
+          ><button class="btn" id="logout">로그아웃</button>
+        </div>
+      </header>
+      <div id="error-banner" class="notice hidden" role="alert"></div>
+      <section id="overview-view">
+        <div class="cards" id="totals"></div>
+        <div class="section-title">서버 자원</div>
+        <div class="cards" id="resources"></div>
+        <div class="grid">
+          <div class="panel">
+            <h2>
+              리뷰 수집 · 분석 추이
+              <span class="sub">최근 1시간 / 5분 구간</span>
+            </h2>
+            <div class="legend">
+              <span><b style="background: #3267e3"></b>신규 저장 리뷰</span
+              ><span><b style="background: #27a28b"></b>분석 완료 리뷰</span>
+            </div>
+            <div id="chart"></div>
+            <div class="timeline-note">
+              현재 구간은 진행 중입니다. 재수집 갱신은 신규 저장 그래프에
+              포함되지 않습니다.
+            </div>
+          </div>
+          <div class="panel">
+            <h2>워커 · 스케줄러</h2>
+            <div id="workers"></div>
+            <div class="sub">
+              10초 heartbeat · 35초 이상 응답이 없으면 오프라인
+            </div>
+          </div>
+        </div>
+        <div class="cards" id="rates"></div>
+        <div class="grid">
+          <div class="panel">
+            <h2>
+              수집 · 분석 큐
+              <button class="link" data-tab="collection">수집 상세 →</button>
+              <button class="link" data-tab="analysis">분석 상세 →</button>
+            </h2>
+            <div id="queues"></div>
+          </div>
+          <div class="panel">
+            <h2>독립 상품 발굴</h2>
+            <div id="discovery"></div>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h2>플랫폼별 저장 데이터</h2>
+            <div id="platforms"></div>
+          </div>
+          <div class="panel">
+            <h2>최신 분석 상태 · 리뷰 없는 상품</h2>
+            <div id="health-breakdown"></div>
+            <div class="section-title">최신 수집 실패</div>
+            <div id="failures"></div>
+          </div>
+        </div>
+      </section>
+      <section id="list-view" class="hidden">
+        <div class="panel">
+          <form class="filter" id="filters">
+            <input
+              class="search"
+              id="query"
+              placeholder="상품명 또는 상품 ID 검색"
+              aria-label="상품 검색"
+            /><select id="platform" aria-label="플랫폼">
+              <option value="">전체 플랫폼</option></select
+            ><select id="job-status" aria-label="작업 상태"></select
+            ><button class="btn primary" type="submit">조회</button>
+          </form>
+          <div class="table-wrap" id="list-table"></div>
+          <div class="foot">
+            <span id="list-note"></span>
+            <div>
+              <button class="btn" id="previous">이전</button>
+              <button class="btn" id="next">다음</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="login-modal" class="modal hidden">
+      <form class="dialog login-dialog" id="login-form">
+        <h2>운영 대시보드 로그인</h2>
+        <p>Data 서버 내부 토큰을 입력해 주세요.</p>
+        <input
+          id="token"
+          type="password"
+          autocomplete="off"
+          placeholder="X-Internal-Token"
+          required
+          aria-label="내부 토큰"
+        /><button class="btn primary">로그인</button>
+        <div id="login-error" class="sub error" role="alert"></div>
+        <div class="sub">
+          AI 서버 토큰과는 별개입니다.<br />인증은 8시간 유지되며 토큰을
+          브라우저 저장소에 보관하지 않습니다.
+        </div>
+      </form>
+    </div>
+    <div id="detail-modal" class="modal hidden">
+      <div
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detail-title"
+      >
+        <div class="dialog-head">
+          <h2 id="detail-title">작업 상세</h2>
+          <button class="btn" id="close-detail">닫기</button>
+        </div>
+        <div class="dialog-body" id="detail-body"></div>
+      </div>
+    </div>
+    <script>
+      "use strict";
+      const $ = (id) => document.getElementById(id),
+        esc = (v) =>
+          String(v ?? "—").replace(
+            /[&<>"']/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              })[c],
+          );
+      const num = (v) => Number(v ?? 0).toLocaleString("ko-KR"),
+        date = (v) =>
+          v
+            ? new Date(v).toLocaleString("ko-KR", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })
+            : "—",
+        bytes = (v) => (v == null ? "—" : (v / 1024 ** 3).toFixed(1) + " GB");
+      const names = {
+        kurly: "컬리",
+        oliveyoung: "올리브영",
+        musinsa: "무신사",
+        elevenst: "11번가",
+        naver: "네이버",
+        auction: "옥션",
+        gmarket: "G마켓",
+        ably: "에이블리",
+      };
+      const states = {
+        pending: "수집 대기",
+        queued: "분석 대기",
+        running: "처리 중",
+        done: "분석 완료",
+        succeeded: "수집 완료",
+        partial: "부분 실패",
+        failed: "실패",
+        stale: "이전 분석",
+        safe: "안전",
+        warn: "주의",
+        danger: "위험",
+      };
+      const pill = (s) =>
+        `<span class="pill ${esc(s)}">${esc(states[s] || s)}</span>`;
+      let tab = "overview",
+        cursor = null,
+        history = [],
+        nextCursor = null,
+        busy = false,
+        detail = null,
+        detailOffset = 0,
+        detailHistory = [],
+        detailNext = null,
+        overviewData = null,
+        listGeneration = 0,
+        detailGeneration = 0;
+      async function api(path, options = {}) {
+        const r = await fetch("/status" + path, {
+          credentials: "same-origin",
+          ...options,
+        });
+        if (r.status === 401) {
+          $("login-modal").classList.remove("hidden");
+          $("connection").textContent = "인증 필요";
+          throw Error("운영 토큰으로 로그인해 주세요.");
+        }
+        if (!r.ok)
+          throw Error(
+            "조회에 실패했습니다 (" +
+              r.status +
+              "). 잠시 후 다시 시도해 주세요.",
+          );
+        return r.json();
+      }
+      function card(label, value, sub, bar) {
+        return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div>${bar != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, bar))}%"></i></div>` : ""}<div class="sub">${sub}</div></div>`;
+      }
+      function chart(items) {
+        if (!items.length) return;
+        const max = Math.max(
+            1,
+            ...items.flatMap((x) => [Number(x.collected), Number(x.analyzed)]),
+          ),
+          w = 650,
+          h = 145,
+          p = 25,
+          step = (w - 2 * p) / Math.max(1, items.length - 1);
+        let svg = `<svg viewBox="0 0 ${w} 180" role="img" aria-label="최근 한 시간의 신규 리뷰 저장과 분석 완료 건수"><title>5분 구간별 수집·분석 건수</title>`;
+        for (let i = 0; i < 4; i++) {
+          let y = 15 + (i * h) / 3;
+          svg += `<line x1="${p}" x2="${w - p}" y1="${y}" y2="${y}" stroke="#edf0f6"/><text x="0" y="${y + 4}" fill="#8593a7" font-size="9">${Math.round(max * (1 - i / 3))}</text>`;
+        }
+        for (const [key, color] of [
+          ["collected", "#3267e3"],
+          ["analyzed", "#27a28b"],
+        ]) {
+          svg += `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${items.map((x, i) => `${p + i * step},${15 + h - (Number(x[key]) / max) * h}`).join(" ")}"/>`;
+          items.forEach((x, i) => {
+            svg += `<circle cx="${p + i * step}" cy="${15 + h - (Number(x[key]) / max) * h}" r="3" fill="${color}"><title>${esc(date(x.bucket))} · ${key === "collected" ? "신규 저장" : "분석 완료"} ${num(x[key])}건</title></circle>`;
+          });
+        }
+        items.forEach((x, i) => {
+          if (i % 3 === 0 || i === items.length - 1)
+            svg += `<text x="${p + i * step}" y="177" text-anchor="middle" fill="#8593a7" font-size="10">${esc(new Date(x.bucket).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))}</text>`;
+        });
+        $("chart").innerHTML = svg + "</svg>";
+      }
+      function renderOverview(d) {
+        overviewData = d;
+        const t = d.totals,
+          r = d.resources,
+          q = d.queues,
+          rate = d.rates_15m;
+        $("totals").innerHTML =
+          card(
+            "등록 상품",
+            num(t.products),
+            "리뷰 없는 상품 " + num(t.empty_products) + "개 포함",
+          ) +
+          card("저장 리뷰", num(t.reviews), "중복 통합 전 원본 DB 행 수") +
+          card(
+            "저장 분석 결과",
+            num(t.analysis_results),
+            "이전 분석 이력을 포함한 결과 행 수",
+          ) +
+          card(
+            "진행 중 작업",
+            num(q.collection.running + q.analysis.running),
+            "수집 " +
+              num(q.collection.running) +
+              " · 분석 " +
+              num(q.analysis.running),
+          );
+        $("resources").innerHTML =
+          card(
+            "CPU 사용률",
+            r.cpu_percent == null ? "측정 중" : r.cpu_percent + "%",
+            esc(
+              (r.cpu_count ?? "—") +
+                " 코어 · " +
+                (r.scope === "host" ? "호스트 서버" : "로컬 환경"),
+            ),
+            r.cpu_percent,
+          ) +
+          card(
+            "메모리 사용률",
+            r.memory ? r.memory.percent + "%" : "측정 불가",
+            r.memory
+              ? bytes(r.memory.used) + " / " + bytes(r.memory.total)
+              : "자원 정보 없음",
+            r.memory?.percent,
+          ) +
+          card(
+            "디스크 사용률",
+            r.disk ? r.disk.percent + "%" : "측정 불가",
+            r.disk
+              ? bytes(r.disk.used) +
+                  " / " +
+                  bytes(r.disk.total) +
+                  " · " +
+                  esc(r.disk.scope)
+              : "자원 정보 없음",
+            r.disk?.percent,
+          ) +
+          card(
+            "서버 부하 (1분)",
+            r.load ? r.load[0].toFixed(2) : "—",
+            "5분 " + (r.load?.[1] ?? "—") + " · 15분 " + (r.load?.[2] ?? "—"),
+          );
+        $("rates").innerHTML =
+          card(
+            "신규 리뷰 저장 / 분",
+            (rate.new_reviews / 15).toFixed(1),
+            "최근 15분 · 갱신 포함 " +
+              (rate.refreshed_reviews / 15).toFixed(1) +
+              "건/분",
+          ) +
+          card(
+            "수집 완료 상품 / 분",
+            (rate.collected_products / 15).toFixed(1),
+            "리뷰 수집 성공 작업 기준",
+          ) +
+          card(
+            "AI 분석 입력 / 분",
+            (rate.ai_claimed_reviews / 15).toFixed(1),
+            "작업 claim 기준 근사치 · 재시도 시 영향",
+          ) +
+          card(
+            "AI 분석 완료 / 분",
+            (rate.ai_completed_reviews / 15).toFixed(1),
+            "done 작업의 입력 리뷰 건수 기준",
+          );
+        chart(d.timeline);
+        const roles = {
+          collection: "수집 워커",
+          analysis: "분석 워커",
+          scheduler: "스케줄러",
+        };
+        let workers = d.workers
+          .map((w) => {
+            const jobs = [
+              ...(w.collection_jobs || []).map((x) => ({
+                ...x,
+                kind: "collection",
+              })),
+              ...(w.analysis_jobs || []).map((x) => ({
+                ...x,
+                kind: "analysis",
+              })),
+            ];
+            return `<div class="worker"><div><strong>${esc(roles[w.role] || w.role)}</strong><small>${esc(w.worker_id)}</small><small>마지막 신호 ${date(w.last_seen_at)}</small>${jobs.map((j) => `<button class="link" data-kind="${j.kind}" data-id="${j.id}">#${j.id} ${esc(names[j.platform] || j.platform)} · ${esc(j.product_id)} ${j.input_review_count != null ? "(" + num(j.input_review_count) + "건)" : ""} →</button>`).join("")}</div><span class="pill ${w.alive ? "alive" : "offline"}">${w.alive ? (jobs.length ? "처리 중" : "실행 중") : "오프라인"}</span></div>`;
+          })
+          .join("");
+        for (const [key, name] of Object.entries(roles))
+          if (!d.workers.some((w) => w.role === key && w.alive))
+            workers += `<div class="notice">${name}의 최근 heartbeat가 없습니다.</div>`;
+        $("workers").innerHTML =
+          workers || '<div class="empty">워커 신호 없음</div>';
+        $("queues").innerHTML = Object.entries(q)
+          .map(
+            ([key, x]) =>
+              `<div class="platform-stat"><strong>${key === "collection" ? "리뷰 수집" : "AI 분석"}</strong><span>대기 ${num(x.waiting)} · 처리 ${num(x.running)} · 만료 ${num(x.expired_leases)}</span></div><div class="sub">가장 오래된 대기 ${date(x.oldest_waiting_at)} · 재시도 소진 ${num(x.exhausted_leases)}</div>`,
+          )
+          .join("");
+        $("discovery").innerHTML =
+          `<div class="stat-row"><span>신규 발굴</span><span class="pill ${d.settings.discovery_enabled ? "alive" : "offline"}">${d.settings.discovery_enabled ? "활성" : "비활성"}</span></div>` +
+          d.discovery
+            .map(
+              (x) =>
+                `<div class="stat-row"><span>다음 검색</span><strong>${date(x.next_run_at)}</strong></div><div class="stat-row"><span>순환 위치</span><span>${num(x.position)}</span></div><div class="stat-row"><span>직전 발굴</span><span>등록 ${num(x.last_saved)} · 예약 ${num(x.last_queued)} · 실패 ${num(x.last_failures)}</span></div><div class="sub">최근 완료 ${date(x.last_completed_at)} · 주기 ${d.settings.discovery_interval_seconds / 60}분</div>`,
+            )
+            .join("");
+        $("platforms").innerHTML = d.platforms
+          .map(
+            (x) =>
+              `<div class="platform-stat"><strong>${esc(names[x.platform] || x.platform)}</strong><span>상품 ${num(x.products)} · 원본 리뷰 ${num(x.reviews)}</span></div>`,
+          )
+          .join("");
+        const reasons = {
+          collected_empty: "수집 완료 · 리뷰 없음",
+          collection_failed: "수집 실패",
+          not_collected: "미수집",
+          pending: "수집 대기",
+          running: "수집 중",
+        };
+        $("health-breakdown").innerHTML =
+          "<div>" +
+          d.latest_analysis
+            .map((x) => pill(x.status) + " " + num(x.count))
+            .join(" &nbsp; ") +
+          '</div><div class="section-title">리뷰 0건 원인</div>' +
+          d.empty_products
+            .map(
+              (x) =>
+                `<div class="stat-row"><span>${esc(names[x.platform] || x.platform)} · ${esc(reasons[x.reason] || x.reason)}</span><span>${num(x.count)}</span></div>`,
+            )
+            .join("") +
+          '<div class="sub">외부 표시 리뷰 수와 실제 저장된 본문 리뷰 수는 다를 수 있습니다.</div>';
+        $("failures").innerHTML =
+          d.latest_collection_failures
+            .map(
+              (x) =>
+                `<div class="stat-row"><span>${esc(names[x.platform] || x.platform)} · ${esc(states[x.status] || x.status)}</span><span>${num(x.count)}건</span></div>`,
+            )
+            .join("") || '<div class="sub">최신 수집 실패 없음</div>';
+        const p = $("platform"),
+          selected = p.value;
+        p.innerHTML =
+          '<option value="">전체 플랫폼</option>' +
+          d.platforms
+            .map(
+              (x) =>
+                `<option value="${esc(x.platform)}">${esc(names[x.platform] || x.platform)}</option>`,
+            )
+            .join("");
+        p.value = selected;
+      }
+      async function loadList() {
+        const generation = ++listGeneration;
+        const params = new URLSearchParams({ q: $("query").value });
+        if ($("platform").value) params.set("platform", $("platform").value);
+        if (tab !== "products" && $("job-status").value)
+          params.set("status", $("job-status").value);
+        if (cursor != null)
+          params.set(tab === "products" ? "offset" : "before", cursor);
+        const d = await api(
+          "/api/" +
+            (tab === "products" ? "products" : "jobs/" + tab) +
+            "?" +
+            params,
+        );
+        if (generation !== listGeneration) return;
+        nextCursor = tab === "products" ? d.next_offset : d.next_cursor;
+        let headers, body;
+        if (tab === "products") {
+          headers = [
+            "상품",
+            "저장 / 외부 표시 리뷰",
+            "최근 수집",
+            "최신 분석",
+            "상세",
+          ];
+          body = d.items
+            .map(
+              (x) =>
+                `<tr><td class="product"><strong>${esc(x.name)}</strong><small>${esc(names[x.platform] || x.platform)} · ${esc(x.product_id)}</small></td><td>${num(x.stored_reviews)} / ${x.advertised_review_count == null ? "—" : num(x.advertised_review_count)}</td><td>${date(x.reviews_last_collected_at)}</td><td>${x.analysis ? pill(x.analysis.status) + '<div class="sub">' + num(x.analysis.input_review_count) + "건 입력</div>" : "분석 없음"}</td><td><button class="link" data-kind="product" data-platform="${esc(x.platform)}" data-product="${esc(x.product_id)}">리뷰 보기</button> ${x.analysis ? `<button class="link" data-kind="analysis" data-id="${x.analysis.id}">요청·결과</button>` : ""}</td></tr>`,
+            )
+            .join("");
+          $("list-note").textContent =
+            "저장 리뷰는 중복 통합 전 원본 행 수입니다. 리뷰 없는 상품도 운영 점검을 위해 표시합니다.";
+        } else {
+          headers = [
+            "작업",
+            "상품",
+            "상태",
+            tab === "analysis" ? "분석 리뷰" : "상품 / 리뷰 수집",
+            "시도",
+            "시작 / 완료",
+            "상세",
+          ];
+          body = d.items
+            .map(
+              (x) =>
+                `<tr><td>#${x.id}</td><td class="product"><strong>${esc(x.name || x.product_id)}</strong><small>${esc(names[x.platform] || x.platform)} · ${esc(x.product_id)}</small></td><td>${pill(x.status)}${x.has_error ? '<div class="sub error">오류 이력 있음</div>' : ""}</td><td>${tab === "analysis" ? num(x.input_review_count) + "건" : pill(x.product_status) + " / " + pill(x.review_status)}</td><td>${x.attempt_count}/${x.max_attempts}</td><td>${date(x.locked_at)}<br><span class="sub">${date(x.completed_at)}</span></td><td><button class="link" data-kind="${tab}" data-id="${x.id}">상세보기 →</button></td></tr>`,
+            )
+            .join("");
+          $("list-note").textContent =
+            tab === "analysis"
+              ? "분석 입력은 저장된 요청 표본입니다. 결과는 검증 후 DB에 저장된 값입니다."
+              : "현재 수집 상태와 상품별 저장 리뷰를 확인합니다.";
+        }
+        $("list-table").innerHTML =
+          `<table><thead><tr>${headers.map((h) => "<th>" + h + "</th>").join("")}</tr></thead><tbody>${body || '<tr><td colspan="7" class="empty">조회 결과가 없습니다.</td></tr>'}</tbody></table>`;
+        $("previous").disabled = !history.length;
+        $("next").disabled = nextCursor == null;
+      }
+      async function refresh() {
+        if (busy || !$("login-modal").classList.contains("hidden")) return;
+        busy = true;
+        try {
+          const d = await api("/api/overview");
+          renderOverview(d);
+          if (tab !== "overview") await loadList();
+          $("updated").textContent = date(d.checked_at) + " 기준";
+          $("connection").innerHTML = '<i class="dot"></i>10초 자동 갱신';
+          $("error-banner").classList.add("hidden");
+        } catch (e) {
+          $("error-banner").textContent = e.message;
+          $("error-banner").classList.remove("hidden");
+          $("connection").textContent = "연결 확인 필요";
+        } finally {
+          busy = false;
+        }
+      }
+      function switchTab(next) {
+        listGeneration++;
+        tab = next;
+        cursor = null;
+        history = [];
+        $("query").value = "";
+        $("platform").value = "";
+        document
+          .querySelectorAll(".nav")
+          .forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+        const titles = {
+          overview: ["운영 개요", "서버와 데이터 파이프라인의 현재 상태"],
+          collection: [
+            "리뷰 수집",
+            "수집 대기 · 처리 중 · 완료 상품과 저장 리뷰",
+          ],
+          analysis: ["AI 분석", "분석 요청 표본과 AI에서 받은 저장 결과"],
+          products: [
+            "상품 데이터",
+            "플랫폼별 상품 · 저장 리뷰 · 최신 분석 상태",
+          ],
+        };
+        $("page-title").textContent = titles[tab][0];
+        $("page-desc").textContent = titles[tab][1];
+        $("overview-view").classList.toggle("hidden", tab !== "overview");
+        $("list-view").classList.toggle("hidden", tab === "overview");
+        $("job-status").classList.toggle("hidden", tab === "products");
+        $("job-status").innerHTML =
+          '<option value="">전체 상태</option>' +
+          (tab === "collection"
+            ? ["pending", "running", "succeeded", "partial", "failed"]
+            : ["queued", "running", "done", "failed", "stale"]
+          )
+            .map((x) => `<option value="${x}">${states[x]}</option>`)
+            .join("");
+        if (tab !== "overview") loadList().catch(showError);
+      }
+      function showError(e) {
+        $("error-banner").textContent = e.message;
+        $("error-banner").classList.remove("hidden");
+      }
+      async function loadDetail() {
+        const generation = ++detailGeneration;
+        const current = detail;
+        const url =
+          current.kind === "product"
+            ? `/api/products/${encodeURIComponent(current.platform)}/${encodeURIComponent(current.productId)}/reviews`
+            : `/api/jobs/${current.kind}/${current.id}`;
+        const d = await api(url + `?offset=${detailOffset}&limit=50`);
+        if (detail !== current || generation !== detailGeneration) return;
+        const j = d.job;
+        detailNext = d.next_offset;
+        $("detail-title").textContent =
+          (current.kind === "analysis" ? "AI 요청 · 분석 결과" : "수집 리뷰") +
+          (j.id ? " #" + j.id : "");
+        let html = `<div class="detail-meta"><strong>${esc(j.name || j.product_id)}</strong><span>${esc(names[j.platform] || j.platform)} · ${esc(j.product_id)}</span>${j.status ? pill(j.status) : ""}${j.attempt_count != null ? `<span>시도 ${j.attempt_count}/${j.max_attempts}</span>` : ""}<span>시작 ${date(j.locked_at)}</span><span>완료 ${date(j.completed_at)}</span></div>`;
+        if (current.kind === "analysis") {
+          const s = d.sampling;
+          html += `<div class="notice">요청 리뷰 ${num(d.total)}건${s ? " · 대표 집합 " + num(s.source_review_count) + "건 · " + esc(s.method || s.policy || "표본") : ""}<br>X-Request-ID / Idempotency-Key: ${esc(d.request_headers["X-Request-ID"])}<br>모델 ${esc(j.model_version)} · 정책 ${esc(j.policy_version)} · 저장 결과 ${num(j.result?.review_count)}건<br>계산 근거가 없는 점수는 null(계산 불가)로 표시합니다. 진행 중 결과는 검증·저장이 끝난 뒤 나타납니다.</div>`;
+          html += d.reviews
+            .map((x) => {
+              const r = x.request,
+                a = x.result;
+              return `<div class="review"><div class="review-head"><span>리뷰 ${esc(r.review_id)}</span><span>별점 ${esc(r.rating)} · ${date(r.written_at)}</span></div><div class="review-cols"><div><div class="label">AI 요청 본문</div><div class="review-content">${esc(r.content)}</div></div><div><div class="label">저장된 AI 결과</div>${
+                a
+                  ? pill(a.level) +
+                    `<div class="scores">${[
+                      ["RTI", a.rti],
+                      ["Text", a.text_score],
+                      ["Behavior", a.behavior_score],
+                      ["Network", a.network_score],
+                    ]
+                      .map(
+                        ([k, v]) =>
+                          `<span>${k} <strong>${v == null ? "계산 불가" : esc(v)}</strong></span>`,
+                      )
+                      .join(
+                        "",
+                      )}</div><div class="review-content">${esc((a.reasons || []).join("\n") || "추가 사유 없음")}</div><div class="sub">저장 ${date(a.created_at)}</div>`
+                  : "<p>저장된 결과 없음</p>"
+              }</div></div></div>`;
+            })
+            .join("");
+        } else {
+          html +=
+            `<div class="notice">현재 원본 리뷰 ${num(d.total)}건<br>${esc(d.note)}</div>` +
+            d.reviews
+              .map(
+                (r) =>
+                  `<div class="review"><div class="review-head"><span>${esc(r.review_id)}</span><span>별점 ${esc(r.rating)} · ${date(r.written_at)}</span></div><div style="padding:15px"><div class="review-content">${esc(r.content)}</div><div class="sub">옵션 ${esc(r.option)} · 최초 저장 ${date(r.first_collected_at)} · 최근 갱신 ${date(r.last_collected_at)}</div></div></div>`,
+              )
+              .join("");
+        }
+        html += `<div class="foot"><span>${d.total ? num(d.offset + 1) + "–" + num(Math.min(d.offset + 50, d.total)) : "0"} / ${num(d.total)}건</span><div><button class="btn" id="detail-prev" ${!detailHistory.length ? "disabled" : ""}>이전</button> <button class="btn" id="detail-next" ${detailNext == null ? "disabled" : ""}>다음</button> <button class="btn" id="detail-refresh">갱신</button></div></div>`;
+        $("detail-body").innerHTML = html;
+      }
+      document.addEventListener("click", (e) => {
+        const t = e.target.closest("[data-tab],[data-kind]");
+        if (!t) return;
+        if (t.dataset.tab) switchTab(t.dataset.tab);
+        else {
+          detail = {
+            kind: t.dataset.kind,
+            id: Number(t.dataset.id),
+            platform: t.dataset.platform,
+            productId: t.dataset.product,
+          };
+          detailOffset = 0;
+          detailHistory = [];
+          $("detail-body").innerHTML =
+            '<div class="spinner">불러오는 중…</div>';
+          $("detail-modal").classList.remove("hidden");
+          loadDetail().catch(showError);
+        }
+      });
+      $("detail-body").addEventListener("click", (e) => {
+        if (e.target.id === "detail-next") {
+          detailHistory.push(detailOffset);
+          detailOffset = detailNext;
+        } else if (e.target.id === "detail-prev") {
+          detailOffset = detailHistory.pop() ?? 0;
+        } else if (e.target.id !== "detail-refresh") return;
+        loadDetail().catch(showError);
+      });
+      $("close-detail").onclick = () => {
+        detail = null;
+        $("detail-modal").classList.add("hidden");
+      };
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") $("close-detail").click();
+      });
+      $("detail-modal").onclick = (e) => {
+        if (e.target === $("detail-modal")) $("close-detail").click();
+      };
+      $("filters").onsubmit = (e) => {
+        e.preventDefault();
+        cursor = null;
+        history = [];
+        loadList().catch(showError);
+      };
+      $("next").onclick = () => {
+        history.push(cursor);
+        cursor = nextCursor;
+        loadList().catch(showError);
+      };
+      $("previous").onclick = () => {
+        cursor = history.pop() ?? null;
+        loadList().catch(showError);
+      };
+      $("refresh").onclick = refresh;
+      $("login-form").onsubmit = async (e) => {
+        e.preventDefault();
+        $("login-error").textContent = "";
+        try {
+          await api("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: $("token").value }),
+          });
+          $("token").value = "";
+          $("login-modal").classList.add("hidden");
+          await refresh();
+        } catch (e) {
+          $("token").value = "";
+          $("login-error").textContent = e.message;
+        }
+      };
+      $("logout").onclick = async () => {
+        await api("/logout", { method: "POST" });
+        location.reload();
+      };
+      refresh();
+      setInterval(refresh, 10000);
+    </script>
+  </body>
+</html>
