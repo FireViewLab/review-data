@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # 브라우저는 페이지 렌더링까지 기다려야 해서 더 넉넉히 준다.
     collect_timeout_seconds: float = 120.0
     browser_collect_timeout_seconds: float = 300.0
+    # HTTP 기반은 페이지를 더 읽고, 브라우저 기반은 자원·시간 상한을 유지한다.
+    review_collect_limit: int = Field(default=200, ge=1, le=1000)
+    browser_review_collect_limit: int = Field(default=50, ge=1, le=1000)
 
     # ── 스케줄러 ───────────────────────────
     # 낡은 상품을 찾아 수집 job 을 예약하는 주기(초).
