@@ -307,3 +307,7 @@ docker compose exec -T analysis-worker crawler analysis-backfill
 ### Data 독립 발굴·운영 상태
 
 DISCOVERY_ENABLED=true이면 Data scheduler가4개 HTTP 플랫폼의64개 키워드를30분마다 순환하고 검색 깊이를20~100개로 확대한다. 재시작 복구와 수집/AI 큐 backpressure를 적용한다. `crawler status`는 대기·진행·만료 lease·최신 실패·리뷰0건 원인을 JSON으로 출력한다. [운영 정책](docs/projects/review-data/specs/2026-10-09-discovery-operations.md)을 참고한다.
+
+### 운영 대시보드
+
+`/status`에서 서버 자원, 수집·분석 큐, 워커 생존 상태, 상품별 리뷰와 AI 요청·저장 결과를 확인한다. Data 서버 `INTERNAL_TOKEN`으로 로그인하며 10초마다 갱신한다. [표시 기준과 인증](docs/projects/review-data/specs/2026-10-09-status-dashboard.md)을 참고한다.
