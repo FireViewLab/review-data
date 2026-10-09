@@ -9,7 +9,7 @@ GET /api/v1/catalog?limit=100&cursor=... 은 platform/product_id 순의 keyset �
 analysis에는 status/job_id/avg_rti/scored_review_count/review_count/source_review_count/
 sampled/model_version/policy_version을 제공한다. avg_rti는 최신 done의 제공된 RTI만
 평균한다. NULL은 제외하고0은 포함한다. 입력·모델·정책 변경 또는 미완료 상태에는
-이전 점수를 내리지 않는다. 분석 건수는 실제 선택된 표본, 원본 건수는 저장된 전체 리뷰다.
+이전 점수를 내리지 않는다. 분석 건수는 실제 선택된 표본, 원본 건수는 중복 통합 후 대표 리뷰 전체 건수다. 원본 DB 행은 보존한다.
 단일 SQL snapshot으로 상품·작업·집계 상태를 일관되게 읽고 원본 리뷰 본문은 보내지 않는다.
 
 Spring은 기동 시와5분마다 페이지를 읽어 표시 캐시를 동기화한다. 외부 호출은 DB
@@ -23,5 +23,6 @@ Spring은 기동 시와5분마다 페이지를 읽어 표시 캐시를 동기화
 워커를 중복 생성하지 않는다. 네이버 브랜드스토어는 기존 지정 상품·관련 상품 시드를
 유지하며 옥션·G마켓·차단 상품은 우회하지 않는다.
 
-Flutter 홈·검색 배지는 실제 점수와 분석 대기/분석 중/실패/재분석 필요/점수 없음을
-구분한다. 표본이면 표본 RTI로 표시하며 완료되지 않은 상태의 옛 점수는 표시하지 않는다.
+Flutter 홈·검색의 분석 상태·표본 RTI 배지 변경은 담당팀 후속 제안이며 아직 미적용이다.
+Data·Spring 카탈로그 동기화는 PR84·Spring PR212의 운영 배포로 적용했다.
+리뷰0건 상품은 Data 검색 응답과 카탈로그에서 제외하고 등록·수집 예약은 유지한다.

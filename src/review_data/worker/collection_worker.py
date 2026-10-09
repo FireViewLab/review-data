@@ -41,7 +41,6 @@ from review_data.core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-REVIEW_COLLECT_LIMIT = 50
 POLL_INTERVAL = 5.0
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -127,7 +126,7 @@ async def run_once(
     try:
         # 멈춘 브라우저 페이지 하나가 워커를 영원히 붙잡지 않게 한다. heartbeat 가
         # lease 를 계속 연장하므로 타임아웃이 없으면 job 이 끝나지 않는다.
-        collected = await asyncio.wait_for(_collect(collector_cls, claim), timeout)
+        collected = await asyncio.wait_for(_collect(collector_cls, claim, settings), timeout)
     except TimeoutError:
         collected = _Collected(errors=[f"수집 시간 초과 ({timeout:.0f}초)"])
         logger.warning(
@@ -247,7 +246,9 @@ async def _heartbeat(session_factory: SessionFactory, claim: _Claim, lease_secon
             return
 
 
-async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collected:
+async def _collect(
+    collector_cls: type[BaseCollector], claim: _Claim, settings: Settings
+) -> _Collected:
     """네트워크 수집만 수행한다. 이 함수는 DB 를 건드리지 않는다."""
     collected = _Collected()
     try:
@@ -260,7 +261,12 @@ async def _collect(collector_cls: type[BaseCollector], claim: _Claim) -> _Collec
 
             try:
                 collected.reviews = await collector.get_reviews(
-                    claim.product_id, limit=REVIEW_COLLECT_LIMIT
+                    claim.product_id,
+                    limit=(
+                        settings.browser_review_collect_limit
+                        if _is_browser_based(collector_cls)
+                        else settings.review_collect_limit
+                    ),
                 )
             except CollectorError as exc:
                 collected.errors.append(f"review: {exc}")

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import text
 
 from review_data.core.db.models import CollectionJob, ProductRow, ReviewRow
+from review_data.core.db.review_identity import representative_reviews
 from review_data.core.models import Product, Review
 
 # 워커가 job 하나를 붙잡고 있을 수 있는 기본 시간. 이 시간을 넘기면 다른 워커가
@@ -162,24 +163,22 @@ class ReviewRepository:
         cursor: str | None = None,
     ) -> tuple[list[ReviewRow], str | None]:
         """written_at 내림차순 cursor 페이지네이션. limit+1개를 가져와 다음 페이지 여부를 판단."""
-        stmt = select(ReviewRow).where(
-            ReviewRow.platform == platform, ReviewRow.product_id == product_id
-        )
+        review, stmt = representative_reviews(platform, product_id)
         if cursor is not None:
             written_at, review_id = _decode_review_cursor(cursor)
             if written_at is not None:
                 stmt = stmt.where(
                     or_(
-                        ReviewRow.written_at < written_at,
-                        and_(ReviewRow.written_at == written_at, ReviewRow.review_id < review_id),
-                        ReviewRow.written_at.is_(None),
+                        review.written_at < written_at,
+                        and_(review.written_at == written_at, review.review_id < review_id),
+                        review.written_at.is_(None),
                     )
                 )
             else:
-                stmt = stmt.where(ReviewRow.written_at.is_(None), ReviewRow.review_id < review_id)
+                stmt = stmt.where(review.written_at.is_(None), review.review_id < review_id)
 
         stmt = stmt.order_by(
-            ReviewRow.written_at.desc().nulls_last(), ReviewRow.review_id.desc()
+            review.written_at.desc().nulls_last(), review.review_id.desc()
         ).limit(limit + 1)
 
         result = await self.session.execute(stmt)
@@ -216,7 +215,9 @@ class ReviewRepository:
                 "last_collected_at": now,
                 "updated_at": now,
             }
-            for review in reviews
+            # 동일 배치의 같은 ID로 ON CONFLICT를 두 번 실행하면 전체 저장이 실패한다.
+            # 동일 ID는 마지막 관측값을 사용한다. 서로 다른 원본 ID는 그대로 보존한다.
+            for review in {review.review_id: review for review in reviews}.values()
         ]
         stmt = pg_insert(ReviewRow).values(rows)
         update_cols = {col: getattr(stmt.excluded, col) for col in _REVIEW_UPDATE_COLUMNS}

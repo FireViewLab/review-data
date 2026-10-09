@@ -5,11 +5,17 @@ import binascii
 import json
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import exists, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.db.analysis_repository import AnalysisRepository, sampling_info
-from review_data.core.db.models import AnalysisJob, CollectionJob, ProductRow, ReviewAnalysisRow
+from review_data.core.db.models import (
+    AnalysisJob,
+    CollectionJob,
+    ProductRow,
+    ReviewAnalysisRow,
+    ReviewRow,
+)
 from review_data.core.db.repository import CollectionJobRepository, ProductRepository
 from review_data.core.models import Product
 from review_data.core.service.collection import CollectionService
@@ -108,6 +114,12 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
     stmt = (
         select(ProductRow, AnalysisJob, average, scored)
         .outerjoin(AnalysisJob, AnalysisJob.id == latest)
+        .where(
+            exists().where(
+                ReviewRow.platform == ProductRow.platform,
+                ReviewRow.product_id == ProductRow.product_id,
+            )
+        )
         .order_by(ProductRow.platform, ProductRow.product_id)
         .limit(limit + 1)
     )
@@ -150,3 +162,21 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         last = rows[limit - 1][0]
         next_cursor = encode_catalog_cursor(last.platform, last.product_id)
     return items, next_cursor
+
+
+async def products_with_reviews(
+    session: AsyncSession, platform: str, products: list[Product]
+) -> list[Product]:
+    if not products:
+        return []
+    available = set(
+        await session.scalars(
+            select(ReviewRow.product_id)
+            .where(
+                ReviewRow.platform == platform,
+                ReviewRow.product_id.in_([p.product_id for p in products]),
+            )
+            .distinct()
+        )
+    )
+    return [p for p in products if p.product_id in available]
