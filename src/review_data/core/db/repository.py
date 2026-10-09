@@ -177,9 +177,9 @@ class ReviewRepository:
             else:
                 stmt = stmt.where(review.written_at.is_(None), review.review_id < review_id)
 
-        stmt = stmt.order_by(
-            review.written_at.desc().nulls_last(), review.review_id.desc()
-        ).limit(limit + 1)
+        stmt = stmt.order_by(review.written_at.desc().nulls_last(), review.review_id.desc()).limit(
+            limit + 1
+        )
 
         result = await self.session.execute(stmt)
         rows = list(result.scalars())
@@ -205,12 +205,12 @@ class ReviewRepository:
                 "platform": platform,
                 "product_id": product_id,
                 "review_id": review.review_id,
-                "content": review.content,
+                "content": review.content.replace("\x00", ""),
                 "rating": review.rating,
-                "author": review.author,
+                "author": review.author.replace("\x00", "") if review.author is not None else None,
                 "written_at": review.written_at,
-                "option": review.option,
-                "images": review.images,
+                "option": review.option.replace("\x00", "") if review.option is not None else None,
+                "images": [url.replace("\x00", "") for url in review.images],
                 "helpful_count": review.helpful_count,
                 "last_collected_at": now,
                 "updated_at": now,
@@ -218,7 +218,10 @@ class ReviewRepository:
             # 동일 배치의 같은 ID로 ON CONFLICT를 두 번 실행하면 전체 저장이 실패한다.
             # 동일 ID는 마지막 관측값을 사용한다. 서로 다른 원본 ID는 그대로 보존한다.
             for review in {review.review_id: review for review in reviews}.values()
+            if review.content.replace("\x00", "").strip()
         ]
+        if not rows:
+            return
         stmt = pg_insert(ReviewRow).values(rows)
         update_cols = {col: getattr(stmt.excluded, col) for col in _REVIEW_UPDATE_COLUMNS}
         stmt = stmt.on_conflict_do_update(
