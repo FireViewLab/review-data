@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # 스케줄러가 건드리지 않을 플랫폼(쉼표 구분). 플랫폼 전체가 차단돼 있으면 상품별
     # 대기만으로는 상품 수만큼 요청이 반복되므로 여기서 통째로 뺀다. 예: "gmarket,auction"
     schedule_excluded_platforms: str = ""
+    discovery_enabled: bool = False
+    discovery_interval_seconds: float = Field(default=1800, ge=300)
+    discovery_queries_per_cycle: int = Field(default=4, ge=1, le=16)
+    discovery_initial_limit: int = Field(default=20, ge=1, le=100)
+    discovery_limit_step: int = Field(default=20, ge=1, le=100)
+    discovery_max_limit: int = Field(default=100, ge=1, le=100)
+    discovery_max_analysis_pending: int = Field(default=100, ge=1)
+    discovery_search_timeout_seconds: float = Field(default=45, gt=0)
+    discovery_platforms: str = "kurly,oliveyoung,musinsa,elevenst"
 
     # 분석 연결은 운영 계약과 URL을 확인한 뒤 명시적으로 활성화한다.
     ai_analysis_enabled: bool = False

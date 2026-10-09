@@ -154,10 +154,8 @@ class SeedingService:
                     raise ValueError("검색 결과의 플랫폼이 collector 와 다릅니다.")
                 # 검색 결과는 상세 수집보다 정보가 적다. 이미 있는 상품을 덮어쓰면 상세
                 # 정보가 지워지고 수집 시각만 새로워져 재수집이 밀린다. 새 상품만 넣는다.
-                if await repo.get(product.platform, product.product_id) is not None:
-                    continue
-                await repo.upsert(product)
-                saved.add(product.product_id)
+                if await repo.insert_search_product(product):
+                    saved.add(product.product_id)
             await session.commit()
         return len(saved)
 

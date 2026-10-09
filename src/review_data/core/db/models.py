@@ -158,6 +158,24 @@ class CollectionJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DiscoveryState(Base):
+    """독립 발굴의 순환 위치와 네트워크 작업 lease를 재시작 사이에 보존한다."""
+
+    __tablename__ = "discovery_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    next_run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    lease_token: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_saved: Mapped[int] = mapped_column(server_default="0")
+    last_queued: Mapped[int] = mapped_column(server_default="0")
+    last_failures: Mapped[int] = mapped_column(server_default="0")
+
+
 class AnalysisJob(Base):
     """AI 분석 job. collection_jobs 와 별도 테이블 — 리뷰 갱신 시 기존 done row 를 stale 로
     마크하고 새 row 를 queued 로 추가하는 방식으로 재분석을 표현한다."""

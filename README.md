@@ -303,3 +303,7 @@ docker compose exec -T analysis-worker crawler analysis-backfill
 같은 상품의 본문·작성자·작성일·별점·옵션·이미지가 완전히 같으면 조회와 분석에서 대표 리뷰 하나만 사용한다. 작성자나 작성일이 없으면 합치지 않는다. 원본 행·원본 ID·과거 분석 결과는 보존한다. 리뷰 없는 상품은 카탈로그와 검색 응답에서 제외하지만 수집 예약은 유지한다.
 
 워커는 HTTP 상품당 기본200건, 브라우저 상품당50건을 요청한다. REVIEW_COLLECT_LIMIT/BROWSER_REVIEW_COLLECT_LIMIT로 각각1~1000건을 설정하고 AI 분석은 기존500건 상한을 유지한다. [중복·노출·수집 정책](docs/projects/review-data/specs/2026-10-09-review-deduplication.md)을 참고한다.
+
+### Data 독립 발굴·운영 상태
+
+DISCOVERY_ENABLED=true이면 Data scheduler가4개 HTTP 플랫폼의64개 키워드를30분마다 순환하고 검색 깊이를20~100개로 확대한다. 재시작 복구와 수집/AI 큐 backpressure를 적용한다. `crawler status`는 대기·진행·만료 lease·최신 실패·리뷰0건 원인을 JSON으로 출력한다. [운영 정책](docs/projects/review-data/specs/2026-10-09-discovery-operations.md)을 참고한다.

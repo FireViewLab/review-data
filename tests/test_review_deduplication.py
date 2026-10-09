@@ -50,6 +50,28 @@ async def test_duplicate_ids_in_one_batch_do_not_abort_storage(session):
     assert len(rows) == 1 and rows[0].content == "수정된 리뷰"
 
 
+async def test_nul_characters_do_not_abort_review_storage(session):
+    await product(session)
+    await ReviewRepository(session).upsert_many(
+        "kurly",
+        "p",
+        [
+            review(
+                "a",
+                content="좋은\x00상품",
+                author="buyer\x00",
+                option="대\x00용량",
+                images=["https://x/\x00image"],
+            ),
+            review("b", content="\x00"),
+        ],
+    )
+    rows, _ = await ReviewRepository(session).list_page("kurly", "p")
+    assert len(rows) == 1
+    assert rows[0].content == "좋은상품" and rows[0].author == "buyer"
+    assert rows[0].option == "대용량" and rows[0].images == ["https://x/image"]
+
+
 async def test_identical_reviews_share_one_page_and_analysis_but_keep_originals(session):
     await product(session)
     repo = ReviewRepository(session)
