@@ -8,7 +8,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
-from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow, ReviewRow
+from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow
+from review_data.core.db.review_identity import representative_reviews
 from review_data.core.settings import Settings
 
 
@@ -29,11 +30,8 @@ class AnalysisRepository:
         )
 
     async def snapshot(self, platform: str, product_id: str) -> list[dict]:
-        rows = await self.session.scalars(
-            select(ReviewRow)
-            .where(ReviewRow.platform == platform, ReviewRow.product_id == product_id)
-            .order_by(ReviewRow.review_id)
-        )
+        review, stmt = representative_reviews(platform, product_id)
+        rows = await self.session.scalars(stmt.order_by(review.review_id))
         return [
             {
                 "review_id": r.review_id,

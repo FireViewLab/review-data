@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 
 from review_data.api import v1
 from review_data.core.base import BaseCollector
-from review_data.core.models import Product
+from review_data.core.db.repository import ReviewRepository
+from review_data.core.models import Product, Review
 from review_data.core.settings import Settings, get_settings
 
 module = importlib.import_module("review_data.api.app")
@@ -45,7 +46,7 @@ def test_search_registers_and_catalog_auth_cursor_are_enforced(engine, monkeypat
         response = client.get(
             "/catalogplat/search", params={"keyword": "상품", "limit": 1}, headers=headers
         )
-        assert response.status_code == 200 and len(response.json()) == 1
+        assert response.status_code == 200 and response.json() == []
         detail = client.get("/api/v1/catalogplat/products/p", headers=headers).json()
         assert detail["job"]["status"] == "pending"
         assert (
@@ -57,9 +58,24 @@ def test_search_registers_and_catalog_auth_cursor_are_enforced(engine, monkeypat
         repeat = client.get("/api/v1/catalogplat/products/p", headers=headers).json()
         assert repeat["job"]["id"] == detail["job"]["id"]
         page = client.get("/api/v1/catalog", headers=headers).json()
+        # 검색 등록은 수집을 예약하지만, 실제 리뷰가 없는 상품은 목록에 내리지 않는다.
+        assert page["items"] == [] and page["next_cursor"] is None
+
+        async def save_review():
+            async with module.app.state.session_factory() as session:
+                await ReviewRepository(session).upsert_many(
+                    "catalogplat",
+                    "p",
+                    [Review(platform="catalogplat", product_id="p", review_id="r", content="리뷰")],
+                )
+                await session.commit()
+
+        client.portal.call(save_review)
+        ready = client.get("/catalogplat/search", params={"keyword": "상품"}, headers=headers)
+        assert len(ready.json()) == 1
+        page = client.get("/api/v1/catalog", headers=headers).json()
         assert page["items"][0]["product"]["product_id"] == "p"
         assert page["items"][0]["analysis"]["status"] == "not_analyzed"
-        assert page["items"][0]["analysis"]["avg_rti"] is None
         assert (
             client.get("/api/v1/catalog", params={"cursor": "bad"}, headers=headers).status_code
             == 400

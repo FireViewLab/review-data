@@ -40,7 +40,7 @@ from review_data.core.db.base import create_engine, create_session_factory
 from review_data.core.discovery import LoadFailure, discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.models import Review
-from review_data.core.service.catalog import register_search_products
+from review_data.core.service.catalog import products_with_reviews, register_search_products
 from review_data.core.settings import get_settings
 
 _INTERNAL_TOKEN_HEADER = APIKeyHeader(
@@ -225,7 +225,7 @@ async def platforms() -> dict:
     "/{platform}/search",
     tags=[docs.TAG_DIRECT],
     summary="상품 검색",
-    description="쇼핑몰을 검색하고 새 상품을 등록한다. 큐 상한 안에서 리뷰 수집을 예약한다.",
+    description="검색 상품을 등록·수집 예약하고, 실제 저장 리뷰가 있는 상품만 반환한다.",
     responses=docs.AUTH_ERROR,
 )
 async def search(
@@ -241,7 +241,7 @@ async def search(
         async with request.app.state.session_factory() as session:
             await register_search_products(session, platform, products, get_settings())
             await session.commit()
-        return products
+            return await products_with_reviews(session, platform, products)
     except Exception as exc:  # noqa: BLE001
         raise _to_http_error(exc) from exc
 
