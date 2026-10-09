@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import APIKeyHeader
 
-from review_data.api import docs, v1
+from review_data.api import docs, status, v1
 from review_data.api.sse import (
     EVENT_DONE,
     EVENT_ERROR,
@@ -41,6 +41,7 @@ from review_data.core.discovery import LoadFailure, discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.models import Review
 from review_data.core.service.catalog import products_with_reviews, register_search_products
+from review_data.core.service.runtime import ResourceSampler
 from review_data.core.settings import get_settings
 
 _INTERNAL_TOKEN_HEADER = APIKeyHeader(
@@ -63,6 +64,14 @@ async def require_internal_token(
     expected_token = get_settings().internal_token
     if request.url.path in _AUTH_EXEMPT_PATHS or not expected_token:
         return
+    if request.url.path == "/status" and request.method == "GET":
+        return
+    if request.url.path in {"/status/login", "/status/logout"} and request.method == "POST":
+        return
+    if request.url.path.startswith("/status/api/") and status.valid_session(
+        request, expected_token
+    ):
+        return
     # str 끼리 비교하면 ASCII 가 아닌 헤더 값에서 TypeError(500)가 나므로 바이트로 비교한다.
     if supplied_token is None or not secrets.compare_digest(
         supplied_token.encode(), expected_token.encode()
@@ -83,9 +92,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine()
     app.state.db_engine = engine
     app.state.session_factory = create_session_factory(engine)
+    app.state.status_cache = None
+    app.state.status_cache_lock = asyncio.Lock()
+    sampler = ResourceSampler()
+    app.state.resource_metrics = sampler.sample()
+
+    async def sample_resources():
+        while True:
+            await asyncio.sleep(5)
+            app.state.resource_metrics = sampler.sample()
+
+    sampler_task = asyncio.create_task(sample_resources())
     try:
         yield
     finally:
+        sampler_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sampler_task
         await engine.dispose()
 
 
@@ -100,6 +123,17 @@ app = FastAPI(
     dependencies=[Depends(require_internal_token)],
 )
 app.include_router(v1.router)
+app.include_router(status.router)
+
+
+@app.middleware("http")
+async def status_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/status"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
 
 _build_openapi = app.openapi
 
@@ -150,9 +184,7 @@ async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONRe
     맞는 code 를 붙여 같은 형식으로 감싸준다.
     """
     if isinstance(exc.detail, dict) and "error" in exc.detail:
-        return JSONResponse(
-            status_code=exc.status_code, content=exc.detail, headers=exc.headers
-        )
+        return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=exc.headers)
 
     code = _STATUS_CODES.get(exc.status_code, "INTERNAL_ERROR")
     body = {"error": {"code": code, "message": str(exc.detail), "detail": None}}
@@ -160,9 +192,7 @@ async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONRe
 
 
 @app.exception_handler(RequestValidationError)
-async def _handle_validation_error(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """검증 실패도 같은 오류 형식으로 내보낸다.
 
     FastAPI 기본 핸들러는 {"detail": [...]} 를 쓰는데, 그러면 호출 측이 오류 형식을

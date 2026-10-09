@@ -25,6 +25,7 @@ from review_data.core.db.repository import ProductRepository, ReviewRepository
 from review_data.core.discovery import discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.service.product_discovery import ProductDiscoveryService
+from review_data.core.service.runtime import runtime_heartbeat
 from review_data.core.service.scheduling import SchedulingService
 from review_data.core.service.seeding import SeedingService, load_seed_file
 from review_data.core.settings import ENV_FILE, env_file_exists, get_settings
@@ -239,12 +240,15 @@ async def _run_worker(once: bool, poll_interval: float) -> None:
     engine = create_engine()
     session_factory = create_session_factory(engine)
     try:
-        if once:
-            processed = await collection_worker.run_once(session_factory, worker_id)
-            typer.echo("job 1건 처리 완료" if processed else "처리할 job 이 없습니다.")
-            return
-        typer.secho(f"워커 시작 (id={worker_id}). Ctrl+C 로 종료합니다.", fg=typer.colors.CYAN)
-        await collection_worker.run_forever(session_factory, worker_id, poll_interval=poll_interval)
+        async with runtime_heartbeat(session_factory, worker_id, "collection"):
+            if once:
+                processed = await collection_worker.run_once(session_factory, worker_id)
+                typer.echo("job 1건 처리 완료" if processed else "처리할 job 이 없습니다.")
+                return
+            typer.secho(f"워커 시작 (id={worker_id}). Ctrl+C 로 종료합니다.", fg=typer.colors.CYAN)
+            await collection_worker.run_forever(
+                session_factory, worker_id, poll_interval=poll_interval
+            )
     finally:
         await engine.dispose()
 
@@ -335,27 +339,32 @@ async def _run_scheduler(once: bool, interval: float | None) -> None:
     registry = _load_registry() if settings.discovery_enabled else {}
     discovery_service = ProductDiscoveryService(session_factory, registry, settings)
     try:
-        while True:
-            try:
-                result = await discovery_service.run_once()
-                if result["attempted"]:
-                    logger.info("신규 발굴 %s", result)
-            except Exception:
+        async with runtime_heartbeat(
+            session_factory, f"scheduler-{socket.gethostname()}-{os.getpid()}", "scheduler"
+        ):
+            while True:
+                try:
+                    result = await discovery_service.run_once()
+                    if result["attempted"]:
+                        logger.info("신규 발굴 %s", result)
+                except Exception:
+                    if once:
+                        raise
+                    logger.exception("신규 발굴 오류. 기존 상품 갱신은 계속합니다.")
+                try:
+                    async with session_factory() as session:
+                        result = await SchedulingService(session).run_once()
+                        await session.commit()
+                    logger.info(
+                        "예약 %d건 (예약 전 대기 %d건)", result.created, result.pending_before
+                    )
+                except Exception:  # noqa: BLE001 - DB 가 잠깐 끊겨도 다음 주기에 다시 시도한다
+                    if once:
+                        raise
+                    logger.exception("예약 중 오류. 다음 주기에 다시 시도합니다.")
                 if once:
-                    raise
-                logger.exception("신규 발굴 오류. 기존 상품 갱신은 계속합니다.")
-            try:
-                async with session_factory() as session:
-                    result = await SchedulingService(session).run_once()
-                    await session.commit()
-                logger.info("예약 %d건 (예약 전 대기 %d건)", result.created, result.pending_before)
-            except Exception:  # noqa: BLE001 - DB 가 잠깐 끊겨도 다음 주기에 다시 시도한다
-                if once:
-                    raise
-                logger.exception("예약 중 오류. 다음 주기에 다시 시도합니다.")
-            if once:
-                return
-            await asyncio.sleep(wait)
+                    return
+                await asyncio.sleep(wait)
     finally:
         await engine.dispose()
 
@@ -435,15 +444,18 @@ async def _run_analysis(once: bool, poll_interval: float, *, backfill: bool, for
             typer.echo(f"분석 작업 {count}건 예약 완료")
         else:
             worker_id = f"analysis-{socket.gethostname()}-{os.getpid()}"
-            if once:
-                processed = await analysis_worker.run_once(factory, worker_id, settings=settings)
-                typer.echo(
-                    "분석 작업 1건 처리 완료" if processed else "처리할 분석 작업이 없습니다."
-                )
-            else:
-                await analysis_worker.run_forever(
-                    factory, worker_id, settings=settings, poll_interval=poll_interval
-                )
+            async with runtime_heartbeat(factory, worker_id, "analysis"):
+                if once:
+                    processed = await analysis_worker.run_once(
+                        factory, worker_id, settings=settings
+                    )
+                    typer.echo(
+                        "분석 작업 1건 처리 완료" if processed else "처리할 분석 작업이 없습니다."
+                    )
+                else:
+                    await analysis_worker.run_forever(
+                        factory, worker_id, settings=settings, poll_interval=poll_interval
+                    )
     finally:
         await engine.dispose()
 
