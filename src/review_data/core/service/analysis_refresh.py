@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from sqlalchemy import exists, func, select, text, update
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION
+from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.analysis_repository import AnalysisRepository
 from review_data.core.db.models import AnalysisCampaign, AnalysisCampaignItem, AnalysisJob
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
@@ -24,8 +25,8 @@ class AnalysisRefreshService:
         self.session = session
         self.settings = settings
 
-    async def run_once(self, *, retry_failed=False):
-        s = self.settings
+    async def run_once(self, *, retry_failed=False, reactivate=False):
+        s = await effective_analysis_settings(self.session, self.settings)
         if not s.analysis_refresh_enabled or not s.ai_analysis_enabled:
             return {"enabled": False, "reserved": 0}
         if not s.ai_model_version or not s.ai_policy_version:
@@ -77,6 +78,14 @@ class AnalysisRefreshService:
                     "max_reviews": s.ai_max_reviews,
                 },
             )
+        if reactivate and campaign.status == "superseded":
+            await self.session.execute(
+                update(AnalysisCampaign)
+                .where(AnalysisCampaign.status == "running", AnalysisCampaign.id != campaign.id)
+                .values(status="superseded", completed_at=datetime.now(UTC))
+            )
+            campaign.status = "running"
+            campaign.completed_at = None
         retry_keys = set()
         if retry_failed:
             await self._reconcile(campaign)

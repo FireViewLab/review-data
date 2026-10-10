@@ -413,14 +413,17 @@ def analysis_refresh(retry_failed: bool = typer.Option(False, "--retry-failed"))
 
 async def _run_analysis_refresh(retry_failed):
     settings = get_settings()
-    if not (
-        settings.analysis_refresh_enabled
-        and settings.ai_analysis_enabled
-        and settings.ai_model_version
-        and settings.ai_policy_version
-    ):
-        raise typer.BadParameter("재분석 활성화와 확정된 모델·정책 버전이 필요합니다.")
     async with session_scope() as session:
+        from review_data.core.db.analysis_control import effective_analysis_settings
+
+        settings = await effective_analysis_settings(session, settings)
+        if not (
+            settings.analysis_refresh_enabled
+            and settings.ai_analysis_enabled
+            and settings.ai_model_version
+            and settings.ai_policy_version
+        ):
+            raise typer.BadParameter("재분석 활성화와 확정된 모델·정책 버전이 필요합니다.")
         result = await AnalysisRefreshService(session, settings).run_once(retry_failed=retry_failed)
         typer.echo(json.dumps(result, ensure_ascii=False))
 

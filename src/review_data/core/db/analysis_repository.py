@@ -8,6 +8,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
+from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow
 from review_data.core.db.review_identity import representative_reviews
 from review_data.core.settings import Settings
@@ -86,6 +87,7 @@ class AnalysisRepository:
         trigger: int | None = None,
         force: bool = False,
     ):
+        settings = await effective_analysis_settings(self.session, settings)
         product = await self.lock_product(platform, product_id)
         if product is None:
             return None
@@ -217,6 +219,7 @@ class AnalysisRepository:
         )
 
     async def complete(self, claim: dict, worker_id: str, response, settings: Settings):
+        settings = await effective_analysis_settings(self.session, settings)
         # 수집 저장과 같은 순서로 잠근다.
         await self.lock_product(claim["platform"], claim["product_id"])
         job = await self._owned(claim["id"], worker_id)
@@ -278,6 +281,7 @@ class AnalysisRepository:
         settings: Settings,
         review_ids: list[str] | None = None,
     ) -> dict:
+        settings = await effective_analysis_settings(self.session, settings)
         product = await self.lock_product(platform, product_id, read=True)
         job = await self.session.scalar(
             select(AnalysisJob)

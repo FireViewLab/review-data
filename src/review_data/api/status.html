@@ -599,6 +599,42 @@
       <section id="overview-view">
         <div class="panel" style="margin-bottom: 20px">
           <h2>모델 버전별 재분석</h2>
+          <p class="sub">
+            AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
+            맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
+          </p>
+          <form id="refresh-target" class="filter" style="margin: 12px 0">
+            <input
+              id="target-model"
+              aria-label="목표 모델 버전"
+              placeholder="model_version"
+              maxlength="200"
+              required
+            />
+            <input
+              id="target-policy"
+              aria-label="목표 정책 버전"
+              placeholder="policy_version"
+              maxlength="200"
+              required
+            />
+            <button class="btn" type="submit" id="start-refresh">
+              Backfill 시작 · 재개
+            </button>
+            <button class="btn" type="button" id="pause-refresh">
+              예약 중지
+            </button>
+            <button class="btn" type="button" id="retry-refresh">
+              실패 건 재시도
+            </button>
+          </form>
+          <div id="refresh-control" class="sub"></div>
+          <div
+            id="refresh-message"
+            class="sub"
+            role="status"
+            aria-live="polite"
+          ></div>
           <div id="campaigns"></div>
         </div>
         <div class="cards" id="totals"></div>
@@ -787,12 +823,16 @@
           $("connection").textContent = "인증 필요";
           throw Error("운영 토큰으로 로그인해 주세요.");
         }
-        if (!r.ok)
+        if (!r.ok) {
+          const failure = await r.json().catch(() => null);
           throw Error(
-            "조회에 실패했습니다 (" +
-              r.status +
-              "). 잠시 후 다시 시도해 주세요.",
+            typeof failure?.detail === "string"
+              ? failure.detail
+              : "조회에 실패했습니다 (" +
+                  r.status +
+                  "). 잠시 후 다시 시도해 주세요.",
           );
+        }
         return r.json();
       }
       function card(label, value, sub, bar) {
@@ -830,6 +870,26 @@
       }
       function renderOverview(d) {
         overviewData = d;
+        const control = d.analysis_control;
+        $("refresh-control").textContent = control
+          ? `현재 목표: ${control.model_version || "미설정"} / ${control.policy_version || "미설정"} · ${control.source === "dashboard" ? "화면에서 저장한 설정" : "서버 설정"} · ${control.enabled ? "자동 예약 활성화" : "자동 예약 중지"}`
+          : "";
+        $("start-refresh").disabled =
+          refreshActionBusy || !d.settings.ai_enabled;
+        $("retry-refresh").disabled =
+          refreshActionBusy ||
+          !d.settings.ai_enabled ||
+          !d.settings.analysis_refresh_enabled;
+        $("pause-refresh").disabled =
+          refreshActionBusy || !d.settings.analysis_refresh_enabled;
+        if (
+          control?.source === "dashboard" &&
+          !$("target-model").value &&
+          !$("target-policy").value
+        ) {
+          $("target-model").value = control.model_version;
+          $("target-policy").value = control.policy_version;
+        }
         const campaigns = d.analysis_campaigns || [];
         $("campaigns").innerHTML = campaigns.length
           ? campaigns
@@ -1266,6 +1326,40 @@
         await api("/logout", { method: "POST" });
         location.reload();
       };
+      let refreshActionBusy = false;
+      async function refreshAction(action, body) {
+        if (refreshActionBusy) return;
+        refreshActionBusy = true;
+        const buttons = ["start-refresh", "pause-refresh", "retry-refresh"];
+        buttons.forEach((id) => ($(id).disabled = true));
+        $("refresh-message").textContent = "처리 중…";
+        try {
+          const result = await api(`/api/analysis-refresh/${action}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: body ? JSON.stringify(body) : undefined,
+          });
+          $("refresh-message").textContent =
+            action === "pause"
+              ? "새 예약을 중지했습니다. 이미 예약된 작업은 마무리하고, 시작 · 재개를 누르면 이어서 처리합니다."
+              : `요청을 반영했습니다. 이번 회차 ${num(result.reserved || 0)}상품 예약 · 이후 워커가 자동으로 이어서 처리합니다.`;
+          await refresh();
+        } catch (e) {
+          $("refresh-message").textContent = e.message;
+        } finally {
+          refreshActionBusy = false;
+          if (overviewData) renderOverview(overviewData);
+        }
+      }
+      $("refresh-target").onsubmit = (e) => {
+        e.preventDefault();
+        refreshAction("start", {
+          model_version: $("target-model").value.trim(),
+          policy_version: $("target-policy").value.trim(),
+        });
+      };
+      $("pause-refresh").onclick = () => refreshAction("pause");
+      $("retry-refresh").onclick = () => refreshAction("retry-failed");
       refresh();
       setInterval(refresh, 10000);
     </script>
