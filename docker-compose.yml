@@ -87,6 +87,16 @@ services:
     stop_signal: SIGINT
     mem_limit: 256m
 
+  # Backfill 캠페인의 작업만 추가 처리한다. 일반 분석은 기존 워커 한 개가 맡는다.
+  analysis-backfill-worker:
+    <<: *app
+    command: ["crawler", "analysis-worker", "--backfill-only"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_signal: SIGINT
+    mem_limit: 256m
+
   # 조회가 없어도 낡은 상품을 다시 수집하도록 job 을 예약한다. 크롤링은 worker 가 한다.
   scheduler:
     <<: *app

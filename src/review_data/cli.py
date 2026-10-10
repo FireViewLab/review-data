@@ -394,12 +394,19 @@ def serve(
 def analysis_worker_command(
     once: bool = typer.Option(False, "--once"),
     poll_interval: float = typer.Option(5, "--poll-interval", min=0.1),
+    backfill_only: bool = typer.Option(
+        False, "--backfill-only", help="진행 중인 Backfill 작업만 처리합니다."
+    ),
 ) -> None:
     """저장된 리뷰를 분석하는 독립 워커를 실행합니다."""
     _require_env()
     logging.basicConfig(level=logging.INFO)
     try:
-        asyncio.run(_run_analysis(once, poll_interval, backfill=False, force=False))
+        asyncio.run(
+            _run_analysis(
+                once, poll_interval, backfill=False, force=False, backfill_only=backfill_only
+            )
+        )
     except KeyboardInterrupt:
         typer.echo("분석 워커를 종료합니다.")
 
@@ -435,7 +442,9 @@ def analysis_backfill(force: bool = typer.Option(False, "--force")) -> None:
     asyncio.run(_run_analysis(True, 5, backfill=True, force=force))
 
 
-async def _run_analysis(once: bool, poll_interval: float, *, backfill: bool, force: bool):
+async def _run_analysis(
+    once: bool, poll_interval: float, *, backfill: bool, force: bool, backfill_only: bool = False
+):
     from sqlalchemy import select
 
     from review_data.core.db.analysis_repository import AnalysisRepository
@@ -476,18 +485,23 @@ async def _run_analysis(once: bool, poll_interval: float, *, backfill: bool, for
                     count += current is not None and current != previous
             typer.echo(f"분석 작업 {count}건 예약 완료")
         else:
-            worker_id = f"analysis-{socket.gethostname()}-{os.getpid()}"
+            prefix = "backfill" if backfill_only else "analysis"
+            worker_id = f"{prefix}-{socket.gethostname()}-{os.getpid()}"
             async with runtime_heartbeat(factory, worker_id, "analysis"):
                 if once:
                     processed = await analysis_worker.run_once(
-                        factory, worker_id, settings=settings
+                        factory, worker_id, settings=settings, backfill_only=backfill_only
                     )
                     typer.echo(
                         "분석 작업 1건 처리 완료" if processed else "처리할 분석 작업이 없습니다."
                     )
                 else:
                     await analysis_worker.run_forever(
-                        factory, worker_id, settings=settings, poll_interval=poll_interval
+                        factory,
+                        worker_id,
+                        settings=settings,
+                        poll_interval=poll_interval,
+                        backfill_only=backfill_only,
                     )
     finally:
         await engine.dispose()

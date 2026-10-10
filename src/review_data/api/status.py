@@ -254,7 +254,9 @@ async def overview(request: Request, session: SessionDep):
         )
         settings = await effective_analysis_settings(session, get_settings())
         result["analysis_control"] = await control_status(session, settings)
-        result["analysis_campaigns"] = await campaign_status(session)
+        result["analysis_campaigns"] = await campaign_status(
+            session, enabled=settings.analysis_refresh_enabled
+        )
         result["settings"] = {
             "analysis_refresh_enabled": settings.analysis_refresh_enabled,
             "target_model_version": settings.ai_model_version,

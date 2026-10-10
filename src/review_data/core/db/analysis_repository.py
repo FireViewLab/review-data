@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
 from review_data.core.db.analysis_control import effective_analysis_settings
-from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow
+from review_data.core.db.models import (
+    AnalysisCampaign,
+    AnalysisCampaignItem,
+    AnalysisJob,
+    ProductRow,
+    ReviewAnalysisRow,
+)
 from review_data.core.db.review_identity import representative_reviews
 from review_data.core.settings import Settings
 
@@ -152,7 +158,7 @@ class AnalysisRepository:
             .limit(1)
         )
 
-    async def claim(self, worker_id: str, lease_seconds: float):
+    async def claim(self, worker_id: str, lease_seconds: float, *, backfill_only=False):
         now = datetime.now(UTC)
         await self.session.execute(
             update(AnalysisJob)
@@ -163,9 +169,22 @@ class AnalysisRepository:
             )
             .values(status="failed", last_error="분석 최대 시도 횟수 초과", completed_at=now)
         )
+        campaign_filter = True
+        if backfill_only:
+            campaign_filter = (
+                select(AnalysisCampaignItem.analysis_job_id)
+                .join(AnalysisCampaign, AnalysisCampaign.id == AnalysisCampaignItem.campaign_id)
+                .where(
+                    AnalysisCampaign.status == "running",
+                    AnalysisCampaignItem.status == "active",
+                    AnalysisCampaignItem.analysis_job_id == AnalysisJob.id,
+                )
+                .exists()
+            )
         job = await self.session.scalar(
             select(AnalysisJob)
             .where(
+                campaign_filter,
                 AnalysisJob.status.in_(["queued", "running"]),
                 AnalysisJob.attempt_count < AnalysisJob.max_attempts,
                 AnalysisJob.available_at <= now,
