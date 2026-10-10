@@ -7,6 +7,7 @@ import logging
 from sqlalchemy.exc import SQLAlchemyError
 
 from review_data.core.analysis_stream import AnalysisStreamClient, AnalysisStreamError
+from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.analysis_repository import AnalysisRepository
 from review_data.core.settings import Settings, get_settings
 
@@ -35,6 +36,7 @@ async def run_once(
     if not settings.ai_analysis_enabled:
         return False
     async with factory() as session:
+        settings = await effective_analysis_settings(session, settings)
         claim = await AnalysisRepository(session).claim(worker_id, lease_seconds)
         await session.commit()
     if claim is None:

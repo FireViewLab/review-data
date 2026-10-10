@@ -9,6 +9,7 @@ from sqlalchemy import exists, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.analysis_repository import (
     AnalysisRepository,
     published_condition,
@@ -94,6 +95,7 @@ def decode_catalog_cursor(cursor: str) -> tuple[str, str]:
 
 
 async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cursor=None):
+    settings = await effective_analysis_settings(session, settings)
     latest = (
         select(AnalysisJob.id)
         .where(

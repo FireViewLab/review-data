@@ -75,6 +75,53 @@ def test_expired_and_tampered_sessions_fail(engine, dashboard_settings):
         )
 
 
+def test_backfill_controls_authenticated_persisted_and_resumable(_clean_db, dashboard_settings):
+    dashboard_settings.ai_stream_url = "https://example.invalid/stream"
+    dashboard_settings.ai_model_version = "old-model"
+    dashboard_settings.ai_policy_version = "old-policy"
+    target = {"model_version": "new-model", "policy_version": "new-policy"}
+    path = "/status/api/analysis-refresh/"
+    with TestClient(module.app) as client:
+        for action in ["start", "pause", "retry-failed"]:
+            assert client.post(path + action, json=target).status_code == 401
+        client.post("/status/login", json={"token": "data-only-secret"})
+        assert client.post(path + "start", json=target).status_code == 409
+        dashboard_settings.ai_analysis_enabled = True
+        for bad in ["", " ", "<script>", "v" * 201]:
+            assert (
+                client.post(path + "start", json={**target, "model_version": bad}).status_code
+                == 422
+            )
+        assert (
+            client.post(
+                path + "start", json=target, headers={"Origin": "https://other.example"}
+            ).status_code
+            == 403
+        )
+        first = client.post(path + "start", json=target, headers={"Origin": "http://testserver"})
+        assert first.status_code == 200, first.text
+        assert first.json()["control"]["model_version"] == "new-model"
+        campaign_id = first.json()["campaign_id"]
+        overview = client.get("/status/api/overview").json()
+        assert overview["settings"]["target_model_version"] == "new-model"
+        assert overview["settings"]["analysis_refresh_enabled"]
+        assert overview["analysis_control"]["source"] == "dashboard"
+        assert client.post(path + "pause").json()["control"]["enabled"] is False
+        assert (
+            client.get("/status/api/overview").json()["settings"]["analysis_refresh_enabled"]
+            is False
+        )
+        assert client.post(path + "retry-failed").status_code == 409
+        assert client.post(path + "start", json=target).json()["campaign_id"] == campaign_id
+        assert client.post(path + "retry-failed").status_code == 200
+    with TestClient(module.app) as restarted:
+        restarted.post("/status/login", json={"token": "data-only-secret"})
+        current = restarted.get("/status/api/overview").json()
+        assert current["analysis_control"]["model_version"] == "new-model"
+        assert dashboard_settings.ai_model_version == "old-model"
+        assert not dashboard_settings.analysis_refresh_enabled
+
+
 async def test_detail_uses_immutable_input_and_preserves_unavailable_results(
     session, session_factory, dashboard_settings
 ):

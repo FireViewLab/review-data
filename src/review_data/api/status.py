@@ -5,17 +5,21 @@ import hashlib
 import hmac
 import secrets
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
-from sqlalchemy import text
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select, text
 
 from review_data.api.v1 import SessionDep
-from review_data.core.service.analysis_refresh import campaign_status
+from review_data.core.db.analysis_control import control_status, effective_analysis_settings
+from review_data.core.db.models import AnalysisRefreshControl
+from review_data.core.service.analysis_refresh import AnalysisRefreshService, campaign_status
 from review_data.core.service.operations import operational_status
+from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import get_settings
 
 router = APIRouter(prefix="/status", include_in_schema=False)
@@ -42,6 +46,74 @@ def valid_session(request: Request, token: str) -> bool:
 
 class Login(BaseModel):
     token: str
+
+
+class RefreshTarget(BaseModel):
+    model_version: str = Field(
+        min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/+@-]*$"
+    )
+    policy_version: str = Field(
+        min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/+@-]*$"
+    )
+
+
+def validate_control_request(request: Request):
+    if not get_settings().internal_token:
+        raise HTTPException(503, "운영 제어에는 Data 내부 토큰 설정이 필요합니다.")
+    origin = request.headers.get("origin")
+    if origin and origin != str(request.base_url).rstrip("/"):
+        raise HTTPException(403, "같은 서버의 대시보드에서 실행해 주세요.")
+
+
+@router.post("/api/analysis-refresh/start")
+async def start_refresh(body: RefreshTarget, request: Request, session: SessionDep):
+    validate_control_request(request)
+    settings = get_settings()
+    if not settings.ai_analysis_enabled:
+        raise HTTPException(409, "AI 분석 연결을 먼저 활성화해 주세요.")
+    await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+    row = await session.get(AnalysisRefreshControl, 1)
+    if row is None:
+        row = AnalysisRefreshControl(id=1)
+        session.add(row)
+    row.model_version, row.policy_version = body.model_version, body.policy_version
+    row.enabled, row.updated_at = True, datetime.now(UTC)
+    await session.flush()
+    result = await AnalysisRefreshService(session, settings).run_once(reactivate=True)
+    await session.commit()
+    request.app.state.status_cache = None
+    return {"control": await control_status(session, settings), **result}
+
+
+@router.post("/api/analysis-refresh/pause")
+async def pause_refresh(request: Request, session: SessionDep):
+    validate_control_request(request)
+    await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+    settings = await effective_analysis_settings(session, get_settings())
+    row = await session.get(AnalysisRefreshControl, 1)
+    if row is None:
+        if not settings.ai_model_version or not settings.ai_policy_version:
+            raise HTTPException(409, "먼저 목표 버전으로 재분석을 시작해 주세요.")
+        row = AnalysisRefreshControl(
+            id=1, model_version=settings.ai_model_version, policy_version=settings.ai_policy_version
+        )
+        session.add(row)
+    row.enabled, row.updated_at = False, datetime.now(UTC)
+    await session.commit()
+    request.app.state.status_cache = None
+    return {"control": await control_status(session, settings)}
+
+
+@router.post("/api/analysis-refresh/retry-failed")
+async def retry_refresh(request: Request, session: SessionDep):
+    validate_control_request(request)
+    settings = await effective_analysis_settings(session, get_settings())
+    if not settings.analysis_refresh_enabled or not settings.ai_analysis_enabled:
+        raise HTTPException(409, "목표 버전으로 시작·재개한 뒤 실패 건을 재시도해 주세요.")
+    result = await AnalysisRefreshService(session, settings).run_once(retry_failed=True)
+    await session.commit()
+    request.app.state.status_cache = None
+    return result
 
 
 @router.get("", response_class=HTMLResponse)
@@ -180,7 +252,8 @@ async def overview(request: Request, session: SessionDep):
               LEFT JOIN analyzed a USING(bucket) ORDER BY b.bucket
         """,
         )
-        settings = get_settings()
+        settings = await effective_analysis_settings(session, get_settings())
+        result["analysis_control"] = await control_status(session, settings)
         result["analysis_campaigns"] = await campaign_status(session)
         result["settings"] = {
             "analysis_refresh_enabled": settings.analysis_refresh_enabled,

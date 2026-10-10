@@ -316,3 +316,14 @@ class AnalysisCampaignItem(Base):
     product_id: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="pending")
     analysis_job_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("analysis_jobs.id"))
+
+
+class AnalysisRefreshControl(Base):
+    __tablename__ = "analysis_refresh_control"
+    __table_args__ = (CheckConstraint("id = 1", name="single_analysis_refresh_control"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_version: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool]
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

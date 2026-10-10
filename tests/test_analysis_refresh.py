@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from review_data.core.analysis_stream import AnalysisStreamError, AnalysisStreamResult
 from review_data.core.db.analysis_repository import AnalysisRepository
-from review_data.core.db.models import AnalysisJob, ProductRow, ReviewRow
+from review_data.core.db.models import AnalysisJob, AnalysisRefreshControl, ProductRow, ReviewRow
 from review_data.core.service.analysis_refresh import (
     AnalysisRefreshService,
     campaign_status,
@@ -85,6 +85,42 @@ async def tick(factory, settings, **kwargs):
         result = await AnalysisRefreshService(s, settings).run_once(**kwargs)
         await s.commit()
         return result
+
+
+async def test_dashboard_target_shared_by_worker_enqueue_and_reads_after_restart(session_factory):
+    factory = session_factory
+    await seed(factory, count=1)
+    original = config("v1").model_copy(update={"analysis_refresh_enabled": False})
+    async with factory() as s:
+        s.add(AnalysisRefreshControl(id=1, model_version="v2", policy_version="p1", enabled=True))
+        await s.commit()
+    first = await tick(factory, original)
+    assert first["reserved"] == 1
+    client = Client("v2")
+    assert await run_once(factory, "new-process", settings=original, client=client)
+    assert len(client.ids) == 1
+    async with factory() as s:
+        body = await AnalysisRepository(s).status("kurly", "0", original)
+        assert body["is_current"] and body["model_version"] == "v2"
+        assert body["target_model_version"] == "v2"
+        items, _ = await catalog_page(s, original, 100)
+        assert items[0][1]["is_current"] and items[0][1]["avg_rti"] == 80
+        s.add(ProductRow(platform="kurly", product_id="new", name="새 상품", url="https://x"))
+        await s.flush()
+        s.add(ReviewRow(platform="kurly", product_id="new", review_id="r", content="신규 리뷰"))
+        await s.flush()
+        job_id = await AnalysisRepository(s).enqueue("kurly", "new", original)
+        job = await s.get(AnalysisJob, job_id)
+        assert job.input_payload["model_version"] == "v2"
+        control = await s.get(AnalysisRefreshControl, 1)
+        control.enabled = False
+        await s.commit()
+    assert (await tick(factory, original))["enabled"] is False
+    async with factory() as s:
+        control = await s.get(AnalysisRefreshControl, 1)
+        control.enabled = True
+        await s.commit()
+    assert (await tick(factory, original))["campaign_id"] == first["campaign_id"]
 
 
 async def test_bounded_resume_keeps_target_snapshot_and_completes(session_factory):
@@ -199,6 +235,19 @@ async def test_new_version_supersedes_campaign_without_erasing_published_result(
         assert reports[1]["status"] == "superseded"
         visible = await AnalysisRepository(s).status("kurly", "0", config("v3"))
         assert visible["model_version"] == "v1" and visible["results"][0]["rti"] == 50
+
+
+async def test_explicit_start_reactivates_previously_superseded_campaign(session_factory):
+    await seed(session_factory, count=3)
+    first = await tick(session_factory, config("v2"))
+    second = await tick(session_factory, config("v3"))
+    resumed = await tick(session_factory, config("v2"), reactivate=True)
+    assert resumed["campaign_id"] == first["campaign_id"]
+    async with session_factory() as s:
+        reports = await campaign_status(s)
+        by_id = {r["id"]: r for r in reports}
+        assert by_id[first["campaign_id"]]["status"] == "running"
+        assert by_id[second["campaign_id"]]["status"] == "superseded"
 
 
 async def test_same_version_rollback_selects_matching_published_result(session_factory):
