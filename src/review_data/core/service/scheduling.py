@@ -38,6 +38,10 @@ class SchedulingService:
         # 보고 상한을 넘긴다. 트랜잭션이 끝날 때까지 스케줄러를 한 번에 하나만 돌린다.
         await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
         pending = await self.jobs.count_pending()
+        from review_data.core.service.analysis_refresh import collection_paused
+
+        if await collection_paused(self.session, self.settings):
+            return ScheduleResult(pending_before=pending, created=0)
         room = self.settings.schedule_max_pending - pending
         if room <= 0:
             return ScheduleResult(pending_before=pending, created=0)
@@ -45,8 +49,7 @@ class SchedulingService:
         candidates = await self.jobs.list_refresh_candidates(
             product_cutoff=now - timedelta(seconds=self.settings.product_ttl_seconds),
             review_cutoff=now - timedelta(seconds=self.settings.review_ttl_seconds),
-            failure_cutoff=now
-            - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
+            failure_cutoff=now - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
             limit=room,
             excluded_platforms=self.settings.excluded_platforms(),
         )

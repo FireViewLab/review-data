@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from review_data.api.v1 import SessionDep
+from review_data.core.service.analysis_refresh import campaign_status
 from review_data.core.service.operations import operational_status
 from review_data.core.settings import get_settings
 
@@ -180,7 +181,11 @@ async def overview(request: Request, session: SessionDep):
         """,
         )
         settings = get_settings()
+        result["analysis_campaigns"] = await campaign_status(session)
         result["settings"] = {
+            "analysis_refresh_enabled": settings.analysis_refresh_enabled,
+            "target_model_version": settings.ai_model_version,
+            "target_policy_version": settings.ai_policy_version,
             "ai_enabled": settings.ai_analysis_enabled,
             "discovery_enabled": settings.discovery_enabled,
             "discovery_interval_seconds": settings.discovery_interval_seconds,

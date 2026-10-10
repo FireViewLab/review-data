@@ -151,15 +151,17 @@ async def test_catalog_uses_latest_real_scores_and_nulls_with_keyset_pages(sessi
         assert following is None
 
 
-async def test_catalog_hides_stale_and_version_mismatched_scores(session_factory):
+async def test_catalog_keeps_published_scores_with_freshness_metadata(session_factory):
     async with session_factory() as session:
         job = await make_analysis(session, "a", [80], config())
         page, _ = await catalog_page(session, config(ai_model_version="new"), 10)
-        assert page[0][1]["status"] == "stale" and page[0][1]["avg_rti"] is None
+        assert page[0][1]["status"] == "done" and page[0][1]["avg_rti"] == 80
+        assert page[0][1]["is_current"] is False
         await session.execute(update(ProductRow).values(analysis_input_hash=None))
         await session.commit()
         page, _ = await catalog_page(session, config(), 10)
-        assert page[0][1]["status"] == "stale" and page[0][1]["scored_review_count"] == 0
+        assert page[0][1]["status"] == "done" and page[0][1]["scored_review_count"] == 1
+        assert page[0][1]["is_current"] is False
         job.status = "failed"
         await session.commit()
 
@@ -175,16 +177,17 @@ async def test_catalog_reports_sample_scope(session_factory):
         assert summary["source_review_count"] == 2
 
 
-async def test_catalog_never_reuses_old_scores_during_reanalysis(session_factory):
+async def test_catalog_keeps_old_scores_during_reanalysis(session_factory):
     async with session_factory() as session:
         old = await make_analysis(session, "a", [85], config())
         new = await AnalysisRepository(session).enqueue("kurly", "a", config(), force=True)
         await session.commit()
         page, _ = await catalog_page(session, config(), 10)
         summary = page[0][1]
-        assert new != old.id and summary["job_id"] == new
-        assert summary["status"] == "queued"
-        assert summary["avg_rti"] is None and summary["scored_review_count"] == 0
+        assert new != old.id and summary["job_id"] == old.id
+        assert summary["refresh_job"]["id"] == new
+        assert summary["status"] == "done"
+        assert summary["avg_rti"] == 85 and summary["scored_review_count"] == 1
 
 
 @pytest.mark.parametrize(

@@ -166,7 +166,7 @@ async def test_old_analysis_including_duplicates_is_replaced_without_forcing(ses
     await session.flush()
     new_id = await AnalysisRepository(session).enqueue("kurly", "p", settings())
     await session.refresh(old)
-    assert new_id != old.id and old.status == "stale"
+    assert new_id != old.id and old.status == "done"
     new = await session.get(AnalysisJob, new_id)
     assert new.status == "queued" and new.input_review_count == 1
     assert await session.scalar(select(func.count()).select_from(ReviewRow)) == 2

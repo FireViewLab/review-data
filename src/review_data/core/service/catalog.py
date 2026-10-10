@@ -7,8 +7,14 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import exists, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from review_data.core.db.analysis_repository import AnalysisRepository, sampling_info
+from review_data.core.db.analysis_repository import (
+    AnalysisRepository,
+    published_condition,
+    published_order,
+    sampling_info,
+)
 from review_data.core.db.models import (
     AnalysisJob,
     CollectionJob,
@@ -99,6 +105,19 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         .correlate(ProductRow)
         .scalar_subquery()
     )
+    published = (
+        select(AnalysisJob.id)
+        .where(
+            AnalysisJob.platform == ProductRow.platform,
+            AnalysisJob.product_id == ProductRow.product_id,
+            published_condition(),
+        )
+        .order_by(*published_order(settings))
+        .limit(1)
+        .correlate(ProductRow)
+        .scalar_subquery()
+    )
+    latest_job = aliased(AnalysisJob)
     average = (
         select(func.avg(ReviewAnalysisRow.rti))
         .where(ReviewAnalysisRow.analysis_job_id == AnalysisJob.id)
@@ -112,8 +131,9 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         .scalar_subquery()
     )
     stmt = (
-        select(ProductRow, AnalysisJob, average, scored)
-        .outerjoin(AnalysisJob, AnalysisJob.id == latest)
+        select(ProductRow, AnalysisJob, average, scored, latest_job.id, latest_job.status)
+        .outerjoin(AnalysisJob, AnalysisJob.id == func.coalesce(published, latest))
+        .outerjoin(latest_job, latest_job.id == latest)
         .where(
             exists().where(
                 ReviewRow.platform == ProductRow.platform,
@@ -129,23 +149,32 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         )
     rows = (await session.execute(stmt)).all()
     items = []
-    for product, job, avg, count in rows[:limit]:
+    for product, job, avg, count, latest_id, latest_status in rows[:limit]:
+        is_current = bool(
+            job
+            and product.analysis_input_hash
+            and AnalysisRepository._same(job, product.analysis_input_hash, settings)
+        )
         if job is None:
             status = "not_analyzed" if settings.ai_analysis_enabled else "disabled"
             sampling = {"sampled": False, "source_review_count": 0, "analyzed_review_count": 0}
         else:
-            status = (
-                job.status
-                if product.analysis_input_hash
-                and AnalysisRepository._same(job, product.analysis_input_hash, settings)
-                else "stale"
+            was_published = job.status == "done" or (
+                job.status == "stale" and job.completed_at is not None and job.result is not None
             )
+            status = "done" if was_published else (job.status if is_current else "stale")
             sampling = sampling_info(job)
         items.append(
             (
                 product,
                 {
                     "status": status,
+                    "is_current": is_current,
+                    "refresh_job": {"id": latest_id, "status": latest_status}
+                    if job and latest_id != job.id
+                    else None,
+                    "target_model_version": settings.ai_model_version,
+                    "target_policy_version": settings.ai_policy_version,
                     "job_id": job.id if job else None,
                     "avg_rti": float(avg) if status == "done" and avg is not None else None,
                     "scored_review_count": count if status == "done" else 0,
