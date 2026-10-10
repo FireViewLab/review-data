@@ -31,13 +31,16 @@ async def run_once(
     settings: Settings | None = None,
     lease_seconds: float = 60,
     client=None,
+    backfill_only: bool = False,
 ) -> bool:
     settings = settings or get_settings()
     if not settings.ai_analysis_enabled:
         return False
     async with factory() as session:
         settings = await effective_analysis_settings(session, settings)
-        claim = await AnalysisRepository(session).claim(worker_id, lease_seconds)
+        claim = await AnalysisRepository(session).claim(
+            worker_id, lease_seconds, backfill_only=backfill_only
+        )
         await session.commit()
     if claim is None:
         return False
@@ -118,7 +121,12 @@ async def run_once(
 
 
 async def run_forever(
-    factory, worker_id: str, *, poll_interval: float = 5, settings: Settings | None = None
+    factory,
+    worker_id: str,
+    *,
+    poll_interval: float = 5,
+    settings: Settings | None = None,
+    backfill_only: bool = False,
 ):
     settings = settings or get_settings()
     if not settings.ai_analysis_enabled:
@@ -133,7 +141,9 @@ async def run_forever(
         except Exception:
             logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
         try:
-            processed = await run_once(factory, worker_id, settings=settings)
+            processed = await run_once(
+                factory, worker_id, settings=settings, backfill_only=backfill_only
+            )
         except Exception:  # noqa: BLE001
             logger.warning("분석 워커 처리 실패: 다음 주기에 다시 확인한다.")
             processed = False

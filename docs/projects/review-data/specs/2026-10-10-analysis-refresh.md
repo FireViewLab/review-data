@@ -35,7 +35,7 @@ ANALYSIS_REFRESH_PAUSE_COLLECTION=true
 
 ```bash
 cd /home/deploy/review-data
-docker compose up -d --no-build --no-deps --force-recreate api worker analysis-worker scheduler
+docker compose up -d --no-build --no-deps --force-recreate api worker analysis-worker analysis-backfill-worker scheduler
 docker compose exec -T api crawler analysis-refresh
 ```
 
@@ -47,7 +47,7 @@ docker compose exec -T api crawler analysis-refresh
 
 캠페인과 상품별 작업 ID를 DB에 보존한다. 서버·스케줄러·워커 재시작 후 같은 목표를 다시 실행해도 동일 캠페인을 이어서 처리한다. 같은 목표에 완료된 캠페인은 매 주기 전체 재분석하지 않는다. 이후 새 상품과 변경 리뷰는 기존 수집 후 분석 흐름으로 처리한다.
 
-새 버전이 들어오면 진행 중인 이전 캠페인은 superseded로 남긴다. 이전 캠페인의 결과·작업 이력을 삭제하지 않는다. 오래된 버전으로 대기 중인 작업을 워커가 획득하면 AI에 보내지 않고 새 버전 작업으로 교체한다.
+새 버전이 들어오면 진행 중인 이전 캠페인은 superseded로 남긴다. 이전 캠페인의 결과·작업 이력을 삭제하지 않는다. 시작·재개 시 이전 버전의 queued 작업을 stale로 전환하고 해당 상품을 현재 목표 캠페인에 넣는다. 저장된 요청 본문과 기존 성공 결과는 보존하고 새 작업 ID로 큐 상한 내에서 재예약한다. 이미 running인 요청은 마무리할 때까지 유지하며, 종료 후 새 목표 분석을 예약한다. 현재 목표의 대기 작업은 같은 ID를 재사용한다. 워커가 직접 획득한 오래된 요청도 AI에 보내지 않고 전환한다.
 
 ## 큐와 수집 순서
 
@@ -77,3 +77,9 @@ docker compose exec -T api crawler analysis-refresh --retry-failed
 `/status`에 최근5개 캠페인의 목표 버전·대상·예약 전 대기·큐 대기·실행·완료·실패·제외·시작/완료 시각을 표시한다. 진행률은 `(완료 + 실패 + 제외) / 대상`이며 실패 건수와 완료 상태를 따로 표시한다. 진행률 숫자는 소수점 둘째 자리까지 표시하고 막대는 실제 비율을 따른다. 처리 건이 있으면 최소2px로 진행 여부를 표시한다. 예를 들어 대상4,478개 중20개 완료는0.45%다. 상품별 최종 결과 저장 후 완료 건수가 늘며, 리뷰500건을 분석 중인 한 상품의 중간 SSE progress는 캠페인 완료율에 포함하지 않는다. 대상0건은100% 완료다. 일반 작업 상세에서 전송 표본과 저장 결과를 확인한다.
 
 Spring·프론트 코드는 수정하지 않는다. 기존 점수 제공 필드는 유지하고 신선도·재분석 상태 필드를 추가한다. [리뷰 선정 기준](2026-10-09-review-analysis-selection.md)을 함께 참고한다.
+
+## 완료 예상시간과 처리량
+
+최근15분 안에 목표 버전으로 성공한 상품 수를 측정 시간으로 나누어 상품/분을 계산한다. 캠페인이 시작된 지15분 이내면 시작 시각부터 측정한다. 남은 상품 수는 대상에서 완료·실패·제외를 뺀 값이며, 이를 실측 속도로 나누어 남은 시간과 예상 완료 시각을 표시한다. 완료5건 이상·측정1분 이상부터 추정하고, 예약 중지 또는 최근5분간 새 완료가 없으면 추정을 보류한다. 화면은10초마다 갱신한다. 상품별 리뷰 수, AI 부하와 재시도에 따라 추정치는 달라지며 실패 건의 별도 재시도 시간은 포함하지 않는다.
+
+기존 analysis-worker 한 개는 모든 분석 작업을 처리한다. 추가 analysis-backfill-worker는 `crawler analysis-worker --backfill-only`로 실행되어 running 캠페인에 연결된 active 작업만 처리한다. Backfill 중에는 최대2상품을 동시에 AI에 보내고, 캠페인이 끝나면 추가 워커는 대기하여 일반 자동 분석은 기존 한 개 처리량을 유지한다. 상품·리뷰 크롤링 워커와 큐 상한100·회차20·상품당 최대500리뷰 기준은 동일하다. 동시 처리 용량이2배이며 실제 완료 속도가 정확히2배라는 보장은 없다. 작업 획득은 DB SKIP LOCKED와 lease로 서로 다른 ID를 맡는다.

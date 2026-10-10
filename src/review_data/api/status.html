@@ -903,7 +903,7 @@
                   completed_with_errors: "완료 · 실패 확인 필요",
                   superseded: "다음 버전으로 전환",
                 };
-                return `<div class="review" style="padding:16px"><div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill">${esc(c.status === "running" && !d.settings.analysis_refresh_enabled ? "예약 중지 · 재개 대기" : campaignStates[c.status] || c.status)}</span><strong>${percent.toFixed(2)}%</strong></div><div class="bar"><i style="width:${percent}%;min-width:${finished ? 2 : 0}px"></i></div><div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">시작 ${date(c.created_at)} · 완료 ${date(c.completed_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
+                return `<div class="review" style="padding:16px"><div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill">${esc(c.status === "running" && !d.settings.analysis_refresh_enabled ? "예약 중지 · 재개 대기" : campaignStates[c.status] || c.status)}</span><strong>${percent.toFixed(2)}%</strong></div><div class="bar"><i style="width:${percent}%;min-width:${finished ? 2 : 0}px"></i></div><div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">${completionEstimate(c)}</div><div class="sub">시작 ${date(c.created_at)} · 완료 ${date(c.completed_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
               })
               .join("")
           : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "재분석 실행 대기 · 새 모델/정책 버전 확인 후 활성화합니다."}</div>`;
@@ -1009,7 +1009,7 @@
                 kind: "analysis",
               })),
             ];
-            return `<div class="worker"><div><strong>${esc(roles[w.role] || w.role)}</strong><small>${esc(w.worker_id)}</small><small>마지막 신호 ${date(w.last_seen_at)}</small>${jobs.map((j) => `<button class="link" data-kind="${j.kind}" data-id="${j.id}">#${j.id} ${esc(names[j.platform] || j.platform)} · ${esc(j.product_id)} ${j.input_review_count != null ? "(" + num(j.input_review_count) + "건)" : ""} →</button>`).join("")}</div><span class="pill ${w.alive ? "alive" : "offline"}">${w.alive ? (jobs.length ? "처리 중" : "실행 중") : "오프라인"}</span></div>`;
+            return `<div class="worker"><div><strong>${esc(w.worker_id.startsWith("backfill-") ? "Backfill 전용 분석 워커" : roles[w.role] || w.role)}</strong><small>${esc(w.worker_id)}</small><small>마지막 신호 ${date(w.last_seen_at)}</small>${jobs.map((j) => `<button class="link" data-kind="${j.kind}" data-id="${j.id}">#${j.id} ${esc(names[j.platform] || j.platform)} · ${esc(j.product_id)} ${j.input_review_count != null ? "(" + num(j.input_review_count) + "건)" : ""} →</button>`).join("")}</div><span class="pill ${w.alive ? "alive" : "offline"}">${w.alive ? (jobs.length ? "처리 중" : "실행 중") : "오프라인"}</span></div>`;
           })
           .join("");
         for (const [key, name] of Object.entries(roles))
@@ -1324,6 +1324,34 @@
         await api("/logout", { method: "POST" });
         location.reload();
       };
+      function completionEstimate(c) {
+        if (c.estimate_state === "estimated") {
+          const minutes = Math.max(
+            1,
+            Math.ceil(c.estimated_remaining_seconds / 60),
+          );
+          const days = Math.floor(minutes / 1440);
+          const hours = Math.floor((minutes % 1440) / 60);
+          const rest = minutes % 60;
+          const duration = [
+            days ? `${days}일` : "",
+            hours ? `${hours}시간` : "",
+            rest ? `${rest}분` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return `예상 남은 시간 약 ${duration} · 예상 완료 ${date(c.estimated_completion_at)} · 최근 ${num(c.rate_products_per_minute)}상품/분`;
+        }
+        return (
+          {
+            finished: "처리 완료",
+            paused: "완료 예상시간: 예약 중지 · 추정 대기",
+            stalled: "완료 예상시간: 최근 완료 기록 부족 · 추정 대기",
+          }[c.estimate_state] ||
+          "완료 예상시간: 처리 기록 축적 중 (완료 5건 · 측정 1분부터 표시)"
+        );
+      }
+
       let refreshActionBusy = false;
       async function refreshAction(action, body) {
         if (refreshActionBusy) return;
@@ -1340,7 +1368,7 @@
           $("refresh-message").textContent =
             action === "pause"
               ? "새 예약을 중지했습니다. 이미 예약된 작업은 마무리하고, 시작 · 재개를 누르면 이어서 처리합니다."
-              : `요청을 반영했습니다. 이번 회차 ${num(result.reserved || 0)}상품 예약 · 이후 워커가 자동으로 이어서 처리합니다.`;
+              : `요청을 반영했습니다. 이번 회차 ${num(result.reserved || 0)}상품 예약${result.outdated_queued ? ` · 이전 버전 대기 ${num(result.outdated_queued)}건 전환` : ""} · 이후 워커가 자동으로 이어서 처리합니다.`;
           await refresh();
         } catch (e) {
           $("refresh-message").textContent = e.message;
