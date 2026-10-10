@@ -219,7 +219,8 @@ async def overview(request: Request, session: SessionDep):
                          'lease_expires_at',j.lease_expires_at))
                  FROM analysis_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
                   AS analysis_jobs
-            FROM worker_heartbeats w WHERE w.last_seen_at>now()-interval '24 hours'
+            FROM worker_heartbeats w WHERE w.stopped_at IS NULL
+                AND w.last_seen_at>now()-interval '5 minutes'
             ORDER BY w.role,w.last_seen_at DESC
         """,
         )

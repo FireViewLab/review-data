@@ -160,6 +160,14 @@ async def test_detail_uses_immutable_input_and_preserves_unavailable_results(
     session.add(
         WorkerHeartbeat(worker_id="old", role="analysis", last_seen_at=now - timedelta(minutes=1))
     )
+    session.add_all(
+        [
+            WorkerHeartbeat(worker_id="stopped", role="analysis", last_seen_at=now, stopped_at=now),
+            WorkerHeartbeat(
+                worker_id="expired", role="scheduler", last_seen_at=now - timedelta(minutes=6)
+            ),
+        ]
+    )
     await session.flush()
     session.add(
         ReviewAnalysisRow(
@@ -184,6 +192,7 @@ async def test_detail_uses_immutable_input_and_preserves_unavailable_results(
         workers = {w["worker_id"]: w for w in summary.json()["workers"]}
         assert workers["idle"]["alive"] is True
         assert workers["old"]["alive"] is False
+        assert set(workers) == {"idle", "old"}
         response = client.get(f"/status/api/jobs/analysis/{job.id}?limit=1", headers=headers)
         assert response.status_code == 200, response.text
         detail = response.json()
