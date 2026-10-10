@@ -311,3 +311,7 @@ DISCOVERY_ENABLED=true이면 Data scheduler가4개 HTTP 플랫폼의64개 키워
 ### 운영 대시보드
 
 `/status`에서 서버 자원, 수집·분석 큐, 워커 생존 상태, 상품별 리뷰와 AI 요청·저장 결과를 확인한다. Data 서버 `INTERNAL_TOKEN`으로 로그인하며 10초마다 갱신한다. [표시 기준과 인증](docs/projects/review-data/specs/2026-10-09-status-dashboard.md)을 참고한다.
+
+### 모델 업데이트 재분석
+
+새 모델·정책 버전을 확정한 뒤 `ANALYSIS_REFRESH_ENABLED=true`로 활성화하면 큐 용량에 맞춰 기존 상품을 재분석한다. 새 결과 저장 전 기존 성공 결과를 유지하고 `/status`에서 진행률을 확인한다. [운영 순서](docs/projects/review-data/specs/2026-10-10-analysis-refresh.md)와 [리뷰 선정 기준](docs/projects/review-data/specs/2026-10-09-review-analysis-selection.md)을 참고한다.

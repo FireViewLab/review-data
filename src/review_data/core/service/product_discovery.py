@@ -124,7 +124,9 @@ class ProductDiscoveryService:
         now = datetime.now(UTC)
         async with self.factory() as session:
             await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
-            if not await self._room(session):
+            from review_data.core.service.analysis_refresh import collection_paused
+
+            if await collection_paused(session, self.settings) or not await self._room(session):
                 return None
             await session.execute(
                 insert(DiscoveryState)

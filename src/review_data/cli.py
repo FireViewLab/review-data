@@ -24,6 +24,7 @@ from review_data.core.db.base import create_engine, create_session_factory, sess
 from review_data.core.db.repository import ProductRepository, ReviewRepository
 from review_data.core.discovery import discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
+from review_data.core.service.analysis_refresh import AnalysisRefreshService
 from review_data.core.service.product_discovery import ProductDiscoveryService
 from review_data.core.service.runtime import runtime_heartbeat
 from review_data.core.service.scheduling import SchedulingService
@@ -344,6 +345,14 @@ async def _run_scheduler(once: bool, interval: float | None) -> None:
         ):
             while True:
                 try:
+                    async with session_factory() as session:
+                        await AnalysisRefreshService(session, settings).run_once()
+                        await session.commit()
+                except Exception:
+                    if once:
+                        raise
+                    logger.warning("재분석 대상 예약 실패. 다음 주기에 다시 확인합니다.")
+                try:
                     result = await discovery_service.run_once()
                     if result["attempted"]:
                         logger.info("신규 발굴 %s", result)
@@ -393,6 +402,27 @@ def analysis_worker_command(
         asyncio.run(_run_analysis(once, poll_interval, backfill=False, force=False))
     except KeyboardInterrupt:
         typer.echo("분석 워커를 종료합니다.")
+
+
+@app.command("analysis-refresh")
+def analysis_refresh(retry_failed: bool = typer.Option(False, "--retry-failed")):
+    """확정된 환경변수 목표 버전으로 재분석 캠페인을 예약·재개한다."""
+    _require_env()
+    asyncio.run(_run_analysis_refresh(retry_failed))
+
+
+async def _run_analysis_refresh(retry_failed):
+    settings = get_settings()
+    if not (
+        settings.analysis_refresh_enabled
+        and settings.ai_analysis_enabled
+        and settings.ai_model_version
+        and settings.ai_policy_version
+    ):
+        raise typer.BadParameter("재분석 활성화와 확정된 모델·정책 버전이 필요합니다.")
+    async with session_scope() as session:
+        result = await AnalysisRefreshService(session, settings).run_once(retry_failed=retry_failed)
+        typer.echo(json.dumps(result, ensure_ascii=False))
 
 
 @app.command("analysis-backfill")
