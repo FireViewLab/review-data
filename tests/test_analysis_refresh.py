@@ -280,3 +280,172 @@ async def test_retry_reconciles_recent_failure_before_reset(session_factory):
         assert state["failed"] == 0 and state["queued"] == 1
         newest = await s.scalar(select(AnalysisJob).order_by(AnalysisJob.id.desc()).limit(1))
         assert newest.id != client.ids[0]
+
+
+async def test_start_retargets_entire_old_queue_with_bounded_new_ids(session_factory):
+    await seed(session_factory, count=3)
+    async with session_factory() as s:
+        old_ids = [
+            await AnalysisRepository(s).enqueue("kurly", str(i), config("v1"), force=True)
+            for i in range(3)
+        ]
+        await s.commit()
+    result = await tick(session_factory, config(), reactivate=True)
+    assert result["outdated_queued"] == result["retargeted_products"] == 3
+    assert result["reserved"] == 1
+    async with session_factory() as s:
+        for job_id in old_ids:
+            job = await s.get(AnalysisJob, job_id)
+            assert job.status == "stale" and job.input_payload["model_version"] == "v1"
+        report = (await campaign_status(s))[0]
+        assert report["total"] == 3 and report["queued"] == 1 and report["waiting"] == 2
+        visible = await AnalysisRepository(s).status("kurly", "0", config())
+        assert visible["results"][0]["rti"] == 50
+    client = Client()
+    await run_once(session_factory, "replacement", settings=config(), client=client)
+    assert client.ids[0] not in old_ids
+
+
+async def test_running_old_request_finishes_before_new_target_reserved(session_factory):
+    await seed(session_factory, count=1, done=False)
+    async with session_factory() as s:
+        claim = await AnalysisRepository(s).claim("old", 600)
+        await s.commit()
+    result = await tick(session_factory, config())
+    assert result["outdated_queued"] == 0 and result["reserved"] == 0
+    async with session_factory() as s:
+        assert (await s.get(AnalysisJob, claim["id"])).status == "running"
+        assert (await campaign_status(s))[0]["running"] == 1
+        await AnalysisRepository(s).fail(claim["id"], "old", False)
+        await s.commit()
+    assert (await tick(session_factory, config()))["reserved"] == 1
+    async with session_factory() as s:
+        report = (await campaign_status(s))[0]
+        assert report["failed"] == 0 and report["queued"] == 1
+
+
+async def test_current_queued_jobs_attached_without_duplicates(session_factory):
+    await seed(session_factory, count=3, version="v2", done=False)
+    result = await tick(session_factory, config())
+    assert result["outdated_queued"] == 0 and result["reserved"] == 0
+    async with session_factory() as s:
+        report = (await campaign_status(s))[0]
+        assert report["queued"] == 3 and report["waiting"] == 0
+        assert await s.scalar(select(func.count()).select_from(AnalysisJob)) == 3
+
+
+async def test_start_reopens_completed_campaign_for_later_old_queue(session_factory):
+    result = await tick(session_factory, config())
+    assert result["status"] == "completed"
+    await seed(session_factory, count=1, done=False)
+    resumed = await tick(session_factory, config(), reactivate=True)
+    assert resumed["campaign_id"] == result["campaign_id"]
+    assert resumed["retargeted_products"] == 1 and resumed["reserved"] == 1
+    assert resumed["status"] == "running"
+
+
+async def test_eta_uses_recent_target_success_and_suppresses_paused_stalled(session_factory):
+    from datetime import UTC, datetime, timedelta
+
+    from review_data.core.db.models import AnalysisCampaign
+
+    await seed(session_factory, count=6)
+    settings = config()
+    for _ in range(5):
+        await tick(session_factory, settings)
+        await run_once(session_factory, "new", settings=settings, client=Client())
+    await tick(session_factory, settings)
+    async with session_factory() as s:
+        campaign = await s.scalar(select(AnalysisCampaign))
+        campaign.created_at = datetime.now(UTC) - timedelta(minutes=10)
+        await s.commit()
+        report = (await campaign_status(s))[0]
+        assert report["recent_done"] == 5 and report["done"] == 5
+        assert report["estimate_state"] == "estimated"
+        assert 119 <= report["estimated_remaining_seconds"] <= 122
+        assert report["rate_products_per_minute"] == 0.5
+        assert (await campaign_status(s, enabled=False))[0]["estimate_state"] == "paused"
+        jobs = list(
+            await s.scalars(
+                select(AnalysisJob).where(
+                    AnalysisJob.model_version == "v2", AnalysisJob.status == "done"
+                )
+            )
+        )
+        for job in jobs:
+            job.completed_at = datetime.now(UTC) - timedelta(minutes=6)
+        await s.commit()
+        assert (await campaign_status(s))[0]["estimate_state"] == "stalled"
+    await run_once(session_factory, "new", settings=settings, client=Client())
+    await tick(session_factory, settings)
+    async with session_factory() as s:
+        report = (await campaign_status(s))[0]
+        assert report["estimate_state"] == "finished" and report["estimated_remaining_seconds"] == 0
+
+
+async def test_two_workers_claim_distinct_jobs_concurrently(session_factory):
+    await seed(session_factory, count=2, version="v2", done=False)
+    arrived = asyncio.Event()
+
+    class ConcurrentClient(Client):
+        async def analyze(self, **kwargs):
+            self.ids.append(kwargs["job_id"])
+            if len(self.ids) == 2:
+                arrived.set()
+            await asyncio.wait_for(arrived.wait(), timeout=5)
+            return await super().analyze(**kwargs)
+
+    client = ConcurrentClient()
+    assert all(
+        await asyncio.gather(
+            *(
+                run_once(session_factory, f"parallel-{i}", settings=config(), client=client)
+                for i in range(2)
+            )
+        )
+    )
+    assert len(set(client.ids)) == 2
+    async with session_factory() as s:
+        assert (
+            await s.scalar(
+                select(func.count()).select_from(AnalysisJob).where(AnalysisJob.status == "done")
+            )
+            == 2
+        )
+
+
+async def test_backfill_extra_worker_leaves_normal_jobs_untouched(session_factory):
+    await seed(session_factory, count=2, version="v2", done=False)
+    client = Client()
+    assert not await run_once(
+        session_factory, "extra", settings=config(), client=client, backfill_only=True
+    )
+    assert client.ids == []
+    await tick(session_factory, config())
+    assert await run_once(
+        session_factory, "extra", settings=config(), client=client, backfill_only=True
+    )
+    assert await run_once(session_factory, "normal", settings=config(), client=client)
+    await tick(session_factory, config())
+    async with session_factory() as s:
+        assert (await campaign_status(s))[0]["status"] == "completed"
+        job_id = await AnalysisRepository(s).enqueue("kurly", "0", config(), force=True)
+        await s.commit()
+    assert not await run_once(
+        session_factory, "extra", settings=config(), client=client, backfill_only=True
+    )
+    assert await run_once(session_factory, "normal", settings=config(), client=client)
+    assert client.ids[-1] == job_id
+
+
+async def test_obsolete_queue_retired_without_repeating_current_success(session_factory):
+    await seed(session_factory, count=1, version="v2")
+    async with session_factory() as s:
+        old_id = await AnalysisRepository(s).enqueue("kurly", "0", config("v1"), force=True)
+        await s.commit()
+    result = await tick(session_factory, config(), reactivate=True)
+    assert result["outdated_queued"] == 1 and result["retargeted_products"] == 0
+    assert result["reserved"] == 0 and result["status"] == "completed"
+    async with session_factory() as s:
+        assert (await s.get(AnalysisJob, old_id)).status == "stale"
+        assert (await campaign_status(s))[0]["total"] == 0
