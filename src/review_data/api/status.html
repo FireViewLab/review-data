@@ -896,16 +896,14 @@
               .map((c) => {
                 const finished =
                   Number(c.done) + Number(c.failed) + Number(c.skipped);
-                const percent = c.total
-                  ? Math.round((100 * finished) / c.total)
-                  : 100;
+                const percent = c.total ? (100 * finished) / c.total : 100;
                 const campaignStates = {
                   running: "재분석 중",
                   completed: "완료",
                   completed_with_errors: "완료 · 실패 확인 필요",
                   superseded: "다음 버전으로 전환",
                 };
-                return `<div class="review" style="padding:16px"><div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill">${esc(c.status === "running" && !d.settings.analysis_refresh_enabled ? "예약 중지 · 재개 대기" : campaignStates[c.status] || c.status)}</span><strong>${percent}%</strong></div><div class="bar"><i style="width:${percent}%"></i></div><div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">시작 ${date(c.created_at)} · 완료 ${date(c.completed_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
+                return `<div class="review" style="padding:16px"><div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill">${esc(c.status === "running" && !d.settings.analysis_refresh_enabled ? "예약 중지 · 재개 대기" : campaignStates[c.status] || c.status)}</span><strong>${percent.toFixed(2)}%</strong></div><div class="bar"><i style="width:${percent}%;min-width:${finished ? 2 : 0}px"></i></div><div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">시작 ${date(c.created_at)} · 완료 ${date(c.completed_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
               })
               .join("")
           : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "재분석 실행 대기 · 새 모델/정책 버전 확인 후 활성화합니다."}</div>`;
