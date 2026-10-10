@@ -281,3 +281,38 @@ class WorkerHeartbeat(Base):
     role: Mapped[str] = mapped_column(Text)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnalysisCampaign(Base):
+    __tablename__ = "analysis_campaigns"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    target_key: Mapped[str] = mapped_column(Text, unique=True)
+    model_version: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[str] = mapped_column(Text)
+    sampling_version: Mapped[str] = mapped_column(Text)
+    max_reviews: Mapped[int]
+    status: Mapped[str] = mapped_column(Text, server_default="running")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnalysisCampaignItem(Base):
+    __tablename__ = "analysis_campaign_items"
+    __table_args__ = (
+        PrimaryKeyConstraint("campaign_id", "platform", "product_id"),
+        ForeignKeyConstraint(
+            ["platform", "product_id"],
+            ["products.platform", "products.product_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_campaign_items_status", "campaign_id", "status"),
+    )
+
+    campaign_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("analysis_campaigns.id", ondelete="CASCADE")
+    )
+    platform: Mapped[str] = mapped_column(Text)
+    product_id: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    analysis_job_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("analysis_jobs.id"))

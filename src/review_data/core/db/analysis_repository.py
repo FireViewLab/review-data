@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
@@ -16,6 +16,23 @@ from review_data.core.settings import Settings
 def input_hash(reviews: list[dict]) -> str:
     payload = json.dumps(reviews, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def published_condition(job=AnalysisJob):
+    # 예전 배포가 stale로 표시한 완료 이력도 복구한다. 미완료 작업은 선택하지 않는다.
+    return or_(
+        job.status == "done",
+        and_(job.status == "stale", job.completed_at.is_not(None), job.result.is_not(None)),
+    )
+
+
+def published_order(settings: Settings):
+    matches = []
+    if settings.ai_model_version:
+        matches.append(AnalysisJob.model_version == settings.ai_model_version)
+    if settings.ai_policy_version:
+        matches.append(AnalysisJob.policy_version == settings.ai_policy_version)
+    return (*([and_(*matches).desc()] if matches else []), AnalysisJob.id.desc())
 
 
 class AnalysisRepository:
@@ -95,7 +112,7 @@ class AnalysisRepository:
             .where(
                 AnalysisJob.platform == platform,
                 AnalysisJob.product_id == product_id,
-                AnalysisJob.status.in_(["queued", "running", "done"]),
+                AnalysisJob.status.in_(["queued", "running"]),
             )
             .values(status="stale", updated_at=datetime.now(UTC))
         )
@@ -120,6 +137,18 @@ class AnalysisRepository:
         self.session.add(job)
         await self.session.flush()
         return job.id
+
+    async def published(self, platform: str, product_id: str, settings: Settings):
+        return await self.session.scalar(
+            select(AnalysisJob)
+            .where(
+                AnalysisJob.platform == platform,
+                AnalysisJob.product_id == product_id,
+                published_condition(),
+            )
+            .order_by(*published_order(settings))
+            .limit(1)
+        )
 
     async def claim(self, worker_id: str, lease_seconds: float):
         now = datetime.now(UTC)
@@ -199,6 +228,10 @@ class AnalysisRepository:
             await self.session.flush()
             await self.enqueue(job.platform, job.product_id, settings)
             return False
+        if (settings.ai_model_version and response.model_version != settings.ai_model_version) or (
+            settings.ai_policy_version and response.policy_version != settings.ai_policy_version
+        ):
+            raise ValueError("목표 분석 버전과 응답 버전이 다릅니다.")
         expected = {r["review_id"] for r in (job.input_payload or {}).get("reviews", [])}
         results = response.results
         actual = [r["review_id"] for r in results]
@@ -259,8 +292,15 @@ class AnalysisRepository:
                 "review_count": 0,
                 "results": [],
             }
+        latest = job
+        published = await self.published(platform, product_id, settings)
         digest = product.analysis_input_hash if product else None
-        status = job.status if digest and self._same(job, digest, settings) else "stale"
+        if published is not None:
+            job = published
+            status = "done"
+        else:
+            status = job.status if digest and self._same(job, digest, settings) else "stale"
+        is_current = bool(digest and self._same(job, digest, settings))
         results = []
         if status == "done":
             stmt = select(ReviewAnalysisRow).where(ReviewAnalysisRow.analysis_job_id == job.id)
@@ -282,6 +322,10 @@ class AnalysisRepository:
         sampling = sampling_info(job)
         return {
             "status": status,
+            "is_current": is_current,
+            "target_model_version": settings.ai_model_version,
+            "target_policy_version": settings.ai_policy_version,
+            "refresh_job": public_job(latest) if latest.id != job.id else None,
             "sampled": sampling["sampled"],
             "source_review_count": sampling["source_review_count"],
             "sampling": sampling,

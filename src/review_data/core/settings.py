@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     ai_internal_token: SecretStr | None = None
     ai_timeout_seconds: float = Field(default=300.0, gt=0)
     ai_max_reviews: int = Field(default=500, ge=1, le=500)
+    analysis_refresh_enabled: bool = False
+    analysis_refresh_max_pending: int = Field(default=100, ge=1)
+    analysis_refresh_batch_size: int = Field(default=20, ge=1, le=100)
+    analysis_refresh_pause_collection: bool = True
     ai_model_version: str | None = None
     ai_policy_version: str | None = None
 

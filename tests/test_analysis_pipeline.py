@@ -89,11 +89,11 @@ async def test_versions_change_and_result_visibility(session_factory):
     await run_once(session_factory, "w", settings=config(), client=Client())
     newer = config(ai_model_version="v2")
     async with session_factory() as s:
-        assert (await AnalysisRepository(s).status("kurly", "p", newer))["results"] == []
+        assert len((await AnalysisRepository(s).status("kurly", "p", newer))["results"]) == 2
         new = await AnalysisRepository(s).enqueue("kurly", "p", newer)
         await s.commit()
         assert new != old
-        assert (await s.get(AnalysisJob, old)).status == "stale"
+        assert (await s.get(AnalysisJob, old)).status == "done"
         assert (await s.get(AnalysisJob, new)).input_payload["model_version"] == "v2"
 
 
@@ -287,7 +287,8 @@ async def test_analysis_read_api_pages_only_current_done_results(session_factory
         await s.commit()
     with TestClient(app) as client:
         body = client.get(path).json()
-        assert body["status"] == "stale" and body["results"] == []
+        assert body["status"] == "done" and len(body["results"]) == 2
+        assert body["is_current"] is False
 
 
 async def test_collection_persistence_enqueues_in_same_transaction(session_factory):
@@ -586,7 +587,9 @@ async def test_shared_read_prevents_mixed_review_analysis_pages(session_factory)
         await s.commit()
     await task
     async with session_factory() as s:
-        assert (await AnalysisRepository(s).status("kurly", "p", config()))["status"] == "queued"
+        state = await AnalysisRepository(s).status("kurly", "p", config())
+        assert state["status"] == "done" and state["refresh_job"]["status"] == "queued"
+        assert state["is_current"] is False
 
 
 async def test_large_product_sends_sample_and_reports_coverage(session_factory):
@@ -641,12 +644,12 @@ async def test_unselected_review_change_invalidates_sample(session_factory):
         )
         new = await AnalysisRepository(s).enqueue("kurly", "p", config())
         await s.commit()
-        assert new != old and (await s.get(AnalysisJob, old)).status == "stale"
+        assert new != old and (await s.get(AnalysisJob, old)).status == "done"
         assert (await s.get(AnalysisJob, new)).input_hash != old_hash
         assert {
             r["review_id"] for r in (await s.get(AnalysisJob, new)).input_payload["reviews"]
         } == selected
-        assert (await AnalysisRepository(s).status("kurly", "p", config()))["results"] == []
+        assert len((await AnalysisRepository(s).status("kurly", "p", config()))["results"]) == 500
 
 
 async def test_sample_policy_and_limit_changes_create_new_jobs(session_factory):
