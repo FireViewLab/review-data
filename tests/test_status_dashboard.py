@@ -244,3 +244,83 @@ def test_cpu_ticks_and_memory_available(tmp_path):
     assert data["load"] == [0.5, 0.4, 0.3]
     assert ResourceSampler(Path("/nonexistent")).sample()["memory"] is None
     assert "token" not in json.dumps(data)
+
+
+async def test_result_count_uses_db_target_latest_success_per_product(session, dashboard_settings):
+    from review_data.core.db.models import AnalysisRefreshControl
+
+    now = datetime.now(UTC)
+    session.add(
+        AnalysisRefreshControl(id=1, model_version="new", policy_version="p2", enabled=False)
+    )
+    session.add(ProductRow(platform="kurly", product_id="p", name="상품", url="https://x"))
+    await session.flush()
+    session.add_all(
+        [
+            ReviewRow(platform="kurly", product_id="p", review_id=str(i), content="리뷰")
+            for i in range(3)
+        ]
+    )
+    await session.flush()
+    for model, policy, state, count, minute in [
+        ("old", "p2", "done", 3, 0),
+        ("new", "p1", "done", 3, 1),
+        ("new", "p2", "done", 3, 2),
+        ("new", "p2", "stale", 2, 3),
+        ("new", "p2", "failed", 3, 4),
+    ]:
+        job = AnalysisJob(
+            platform="kurly",
+            product_id="p",
+            status=state,
+            model_version=model,
+            policy_version=policy,
+            completed_at=now + timedelta(minutes=minute),
+            result={"review_count": count},
+        )
+        session.add(job)
+        await session.flush()
+        session.add_all(
+            [
+                ReviewAnalysisRow(
+                    analysis_job_id=job.id, platform="kurly", product_id="p", review_id=str(i)
+                )
+                for i in range(count)
+            ]
+        )
+    await session.commit()
+    with TestClient(module.app) as client:
+        response = client.get(
+            "/status/api/overview", headers={"X-Internal-Token": "data-only-secret"}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["totals"]["analysis_results"] == 2
+        assert body["settings"]["target_model_version"] == "new"
+        assert body["settings"]["target_policy_version"] == "p2"
+
+
+async def test_result_count_without_target_is_zero(session, dashboard_settings):
+    session.add(ProductRow(platform="kurly", product_id="p", name="상품", url="https://x"))
+    await session.flush()
+    session.add(ReviewRow(platform="kurly", product_id="p", review_id="r", content="리뷰"))
+    job = AnalysisJob(
+        platform="kurly",
+        product_id="p",
+        status="done",
+        model_version="old",
+        policy_version="p1",
+        completed_at=datetime.now(UTC),
+    )
+    session.add(job)
+    await session.flush()
+    session.add(
+        ReviewAnalysisRow(analysis_job_id=job.id, platform="kurly", product_id="p", review_id="r")
+    )
+    await session.commit()
+    with TestClient(module.app) as client:
+        response = client.get(
+            "/status/api/overview", headers={"X-Internal-Token": "data-only-secret"}
+        )
+        assert response.status_code == 200
+        assert response.json()["totals"]["analysis_results"] == 0

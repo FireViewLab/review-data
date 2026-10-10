@@ -922,7 +922,9 @@
           card(
             "저장 분석 결과",
             num(t.analysis_results),
-            "이전 분석 이력을 포함한 결과 행 수",
+            d.settings.target_model_version && d.settings.target_policy_version
+              ? `목표 ${esc(d.settings.target_model_version)} / ${esc(d.settings.target_policy_version)} · 상품별 최신 성공 결과`
+              : "목표 모델·정책 버전 미설정",
           ) +
           card(
             "진행 중 작업",
