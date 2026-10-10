@@ -170,6 +170,7 @@ async def overview(request: Request, session: SessionDep):
         cached = getattr(request.app.state, "status_cache", None)
         if cached and time.monotonic() - cached[0] < 10:
             return cached[1]
+        settings = await effective_analysis_settings(session, get_settings())
         result = await operational_status(session)
         result["resources"] = request.app.state.resource_metrics
         result["totals"] = (
@@ -178,11 +179,18 @@ async def overview(request: Request, session: SessionDep):
                 """
             SELECT (SELECT count(*) FROM products) AS products,
                    (SELECT count(*) FROM reviews) AS reviews,
-                   (SELECT count(*) FROM review_analyses) AS analysis_results,
+                   (SELECT count(*) FROM review_analyses a JOIN (
+                       SELECT DISTINCT ON (platform,product_id) id FROM analysis_jobs
+                       WHERE model_version=:model AND policy_version=:policy
+                         AND (status='done' OR (status='stale' AND completed_at IS NOT NULL
+                              AND result IS NOT NULL))
+                       ORDER BY platform,product_id,completed_at DESC NULLS LAST,id DESC
+                    ) latest ON latest.id=a.analysis_job_id) AS analysis_results,
                    (SELECT count(*) FROM products p WHERE NOT EXISTS
                       (SELECT 1 FROM reviews r WHERE r.platform=p.platform
                        AND r.product_id=p.product_id)) AS empty_products
         """,
+                {"model": settings.ai_model_version, "policy": settings.ai_policy_version},
             )
         )[0]
         result["rates_15m"] = (
@@ -253,7 +261,6 @@ async def overview(request: Request, session: SessionDep):
               LEFT JOIN analyzed a USING(bucket) ORDER BY b.bucket
         """,
         )
-        settings = await effective_analysis_settings(session, get_settings())
         result["analysis_control"] = await control_status(session, settings)
         result["analysis_campaigns"] = await campaign_status(
             session, enabled=settings.analysis_refresh_enabled
