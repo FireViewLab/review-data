@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -222,17 +222,35 @@ class ReviewRepository:
         ]
         if not rows:
             return
-        stmt = pg_insert(ReviewRow).values(rows)
-        update_cols = {col: getattr(stmt.excluded, col) for col in _REVIEW_UPDATE_COLUMNS}
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["platform", "product_id", "review_id"], set_=update_cols
-        )
-        await self.session.execute(stmt)
-        await self.session.execute(
-            update(ProductRow)
-            .where(ProductRow.platform == platform, ProductRow.product_id == product_id)
-            .values(analysis_input_hash=None)
-        )
+        # asyncpg의 32,767개 바인드 한도보다 작게 나누되 모든 배치는 같은
+        # 트랜잭션/상품 잠금에 속한다. 중간 실패 시 전체 저장을 롤백한다.
+        changed = False
+        for offset in range(0, len(rows), 500):
+            stmt = pg_insert(ReviewRow).values(rows[offset : offset + 500])
+            data_changed = or_(
+                *(
+                    getattr(ReviewRow, col).is_distinct_from(getattr(stmt.excluded, col))
+                    for col in _REVIEW_UPDATE_COLUMNS
+                    if col not in {"last_collected_at", "updated_at"}
+                )
+            )
+            update_cols = {col: getattr(stmt.excluded, col) for col in _REVIEW_UPDATE_COLUMNS}
+            update_cols["updated_at"] = case(
+                (data_changed, stmt.excluded.updated_at), else_=ReviewRow.updated_at
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["platform", "product_id", "review_id"], set_=update_cols
+            ).returning(ReviewRow.updated_at == now)
+            observations = await self.session.scalars(stmt)
+            changed = any(observations) or changed
+        # 동일 관측은 last_collected_at만 전진시킨다. 내용/메타데이터가 달라진
+        # 경우에만 분석 입력 캐시를 무효화한다(도움 수 변경도 보수적으로 포함).
+        if changed:
+            await self.session.execute(
+                update(ProductRow)
+                .where(ProductRow.platform == platform, ProductRow.product_id == product_id)
+                .values(analysis_input_hash=None)
+            )
 
 
 class CollectionJobRepository:
