@@ -84,6 +84,25 @@ async def operational_status(session):
             )
         ).mappings()
     ]
+    result["collection_failure_causes"] = [
+        dict(row)
+        for row in (
+            await session.execute(
+                text("""
+                SELECT platform,coalesce(failure_kind,'legacy_unknown') AS failure_kind,
+                    count(*) AS count,
+                    count(*) FILTER (WHERE retry_after>now()) AS cooling_down,
+                    min(retry_after) FILTER (WHERE retry_after>now()) AS next_retry_at
+                FROM (
+                    SELECT DISTINCT ON(platform,product_id)
+                        platform,product_id,status,failure_kind,retry_after
+                    FROM collection_jobs ORDER BY platform,product_id,id DESC
+                ) j WHERE status IN ('partial','failed')
+                GROUP BY platform,failure_kind ORDER BY platform,failure_kind
+            """)
+            )
+        ).mappings()
+    ]
     result["discovery"] = [
         dict(row)
         for row in (

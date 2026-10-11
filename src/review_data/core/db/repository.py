@@ -16,6 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import text
 
+from review_data.core.collection_failure import failure_kind as classify_failure
+from review_data.core.collection_failure import retry_delay
 from review_data.core.db.models import CollectionJob, ProductRow, ReviewRow
 from review_data.core.db.review_identity import representative_reviews
 from review_data.core.models import Product, Review
@@ -300,11 +302,28 @@ class CollectionJobRepository:
         has_active_job = exists().where(
             same_product, CollectionJob.status.in_(("pending", "running"))
         )
+        # 최신 완료 작업만 적용한다. 과거 실패 뒤 수동 수집이 성공하면 이전
+        # 대기 시각이 남아 있어도 다음 정기 수집을 막지 않는다.
+        latest_terminal = (
+            select(CollectionJob.id)
+            .where(same_product, CollectionJob.status.in_(("succeeded", "partial", "failed")))
+            .order_by(CollectionJob.id.desc())
+            .limit(1)
+            .correlate(ProductRow)
+            .scalar_subquery()
+        )
         failed_recently = exists().where(
             same_product,
+            CollectionJob.id == latest_terminal,
             CollectionJob.status.in_(("failed", "partial")),
-            # 완료 시각이 비어 있는 실패 이력(수동 정리 등)이 대기를 건너뛰지 않게 한다.
-            func.coalesce(CollectionJob.completed_at, CollectionJob.updated_at) > failure_cutoff,
+            or_(
+                CollectionJob.retry_after > func.now(),
+                and_(
+                    CollectionJob.retry_after.is_(None),
+                    func.coalesce(CollectionJob.completed_at, CollectionJob.updated_at)
+                    > failure_cutoff,
+                ),
+            ),
         )
         stmt = (
             select(ProductRow.platform, ProductRow.product_id)
@@ -455,6 +474,8 @@ class CollectionJobRepository:
         product_status: str,
         review_status: str,
         error: str | None = None,
+        failure_kind: str | None = None,
+        cooldown_seconds: int = 21600,
     ) -> bool:
         """소유권이 유지될 때만 완료 상태로 전이하고, 전이했는지 여부를 반환한다.
 
@@ -468,6 +489,44 @@ class CollectionJobRepository:
         else:
             status = "partial"
 
+        kind = None if status == "succeeded" else failure_kind or classify_failure(error or "")
+        delay = 0
+        if kind:
+            last_success = (
+                select(func.max(CollectionJob.id))
+                .where(
+                    CollectionJob.platform
+                    == select(CollectionJob.platform)
+                    .where(CollectionJob.id == job_id)
+                    .scalar_subquery(),
+                    CollectionJob.product_id
+                    == select(CollectionJob.product_id)
+                    .where(CollectionJob.id == job_id)
+                    .scalar_subquery(),
+                    CollectionJob.status == "succeeded",
+                    CollectionJob.id < job_id,
+                )
+                .scalar_subquery()
+            )
+            consecutive = await self.session.scalar(
+                select(func.count())
+                .select_from(CollectionJob)
+                .where(
+                    CollectionJob.platform
+                    == select(CollectionJob.platform)
+                    .where(CollectionJob.id == job_id)
+                    .scalar_subquery(),
+                    CollectionJob.product_id
+                    == select(CollectionJob.product_id)
+                    .where(CollectionJob.id == job_id)
+                    .scalar_subquery(),
+                    CollectionJob.id > func.coalesce(last_success, 0),
+                    CollectionJob.id < job_id,
+                    CollectionJob.status.in_(("partial", "failed")),
+                )
+            )
+            delay = retry_delay(kind, (consecutive or 0) + 1, cooldown_seconds)
+
         stmt = text(
             """
             UPDATE collection_jobs
@@ -475,6 +534,9 @@ class CollectionJobRepository:
                 product_status = :product_status,
                 review_status = :review_status,
                 last_error = :error,
+                failure_kind = :failure_kind,
+                retry_after = CASE WHEN CAST(:failure_kind AS text) IS NULL THEN NULL
+                    ELSE now() + CAST(:delay AS integer) * interval '1 second' END,
                 completed_at = now(),
                 updated_at = now()
             WHERE id = :job_id
@@ -492,6 +554,8 @@ class CollectionJobRepository:
                 "product_status": product_status,
                 "review_status": review_status,
                 "error": error,
+                "failure_kind": kind,
+                "delay": delay,
             },
         )
         return result.rowcount == 1
@@ -506,6 +570,8 @@ class CollectionJobRepository:
             """
             UPDATE collection_jobs
             SET status = 'failed',
+                failure_kind = 'timeout',
+                retry_after = now() + interval '1 hour',
                 completed_at = now(),
                 updated_at = now(),
                 last_error = coalesce(last_error || ' / ', '') || '최대 시도 횟수 초과'

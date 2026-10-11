@@ -135,6 +135,7 @@ class CollectionJob(Base):
         ),
         # claim 쿼리(FOR UPDATE SKIP LOCKED) 지원
         Index("idx_collection_jobs_claim", "status", "lease_expires_at"),
+        Index("idx_collection_jobs_product_history", "platform", "product_id", "id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -150,6 +151,8 @@ class CollectionJob(Base):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    failure_kind: Mapped[str | None] = mapped_column(Text)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     requested_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
