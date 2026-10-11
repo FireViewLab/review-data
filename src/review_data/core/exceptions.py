@@ -24,3 +24,7 @@ class ParseError(CollectorError):
 
     사이트 개편으로 셀렉터나 JSON 구조가 바뀌면 이 예외가 발생합니다.
     """
+
+
+class AccessBlockedError(ParseError):
+    """정상 접근에서 차단·로그인·봇 확인이 관측되어 수집을 중단했을 때."""

@@ -22,7 +22,7 @@ from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from review_data.core.browser import BrowserCollector
-from review_data.core.exceptions import NotSupportedError, ParseError
+from review_data.core.exceptions import AccessBlockedError, NotSupportedError, ParseError
 from review_data.core.models import Product, Review
 from review_data.core.settings import Settings, get_settings
 
@@ -332,7 +332,7 @@ class NaverCollector(BrowserCollector):
 
         status = response.status if response is not None else None
         if is_blocked(status, await page.content(), page.url):
-            raise ParseError(
+            raise AccessBlockedError(
                 f"[naver] 접근이 차단됐습니다 (캡차·로그인·HTTP {status}). "
                 "우회하지 않고 중단합니다."
             )

@@ -1059,11 +1059,23 @@
             )
             .join("") +
           '<div class="sub">외부 표시 리뷰 수와 실제 저장된 본문 리뷰 수는 다를 수 있습니다.</div>';
+        const failureNames = {
+          blocked: "접근 차단 · 요청 제한",
+          credentials: "인증 설정 필요",
+          unsupported: "미지원",
+          not_found: "상품 없음",
+          timeout: "시간 초과",
+          network: "네트워크 · 서버 오류",
+          storage: "DB 저장 실패",
+          parse: "응답 형식 변경",
+          unknown: "기타 오류",
+          legacy_unknown: "이전 이력 · 미분류",
+        };
         $("failures").innerHTML =
-          d.latest_collection_failures
+          (d.collection_failure_causes || [])
             .map(
               (x) =>
-                `<div class="stat-row"><span>${esc(names[x.platform] || x.platform)} · ${esc(states[x.status] || x.status)}</span><span>${num(x.count)}건</span></div>`,
+                `<div class="stat-row"><span>${esc(names[x.platform] || x.platform)} · ${esc(failureNames[x.failure_kind] || "기타 오류")}</span><span>${num(x.count)}건</span></div><div class="sub">정기 재예약 대기 ${num(x.cooling_down)}건 · 다음 재시도 가능 ${date(x.next_retry_at)}</div>`,
             )
             .join("") || '<div class="sub">최신 수집 실패 없음</div>';
         const p = $("platform"),

@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from review_data.core.base import BaseCollector
 from review_data.core.browser import BrowserCollector
+from review_data.core.collection_failure import dominant_failure, failure_kind
 from review_data.core.db.analysis_repository import AnalysisRepository
 from review_data.core.db.models import CollectionJob
 from review_data.core.db.repository import (
@@ -35,7 +36,7 @@ from review_data.core.db.repository import (
     ReviewRepository,
 )
 from review_data.core.discovery import discover
-from review_data.core.exceptions import CollectorError
+from review_data.core.exceptions import AccessBlockedError, CollectorError
 from review_data.core.models import Product, Review
 from review_data.core.settings import Settings, get_settings
 
@@ -63,6 +64,7 @@ class _Collected:
     product: Product | None = None
     reviews: list[Review] | None = None
     errors: list[str] = field(default_factory=list)
+    failure_kinds: list[str] = field(default_factory=list)
 
 
 def _is_browser_based(collector_cls: type[BaseCollector]) -> bool:
@@ -118,6 +120,8 @@ async def run_once(
             product_status="failed",
             review_status="failed",
             errors=[f"'{claim.platform}' collector가 등록되어 있지 않습니다."],
+            kind="unsupported",
+            cooldown_seconds=settings.schedule_failure_cooldown_seconds,
         )
         return True
 
@@ -128,7 +132,9 @@ async def run_once(
         # lease 를 계속 연장하므로 타임아웃이 없으면 job 이 끝나지 않는다.
         collected = await asyncio.wait_for(_collect(collector_cls, claim, settings), timeout)
     except TimeoutError:
-        collected = _Collected(errors=[f"수집 시간 초과 ({timeout:.0f}초)"])
+        collected = _Collected(
+            errors=[f"수집 시간 초과 ({timeout:.0f}초)"], failure_kinds=["timeout"]
+        )
         logger.warning(
             "[%s/%s] 수집이 %.0f초를 넘겨 중단했습니다.",
             claim.platform,
@@ -149,6 +155,8 @@ async def run_once(
         product_status=product_status,
         review_status=review_status,
         errors=errors,
+        kind=dominant_failure(collected.failure_kinds + [failure_kind(x) for x in errors]),
+        cooldown_seconds=settings.schedule_failure_cooldown_seconds,
     )
     return True
 
@@ -256,8 +264,11 @@ async def _collect(
             try:
                 collected.product = await collector.get_product(claim.product_id)
             except CollectorError as exc:
+                collected.failure_kinds.append(failure_kind(exc))
                 collected.errors.append(f"product: {exc}")
                 logger.warning("[%s/%s] 상품 수집 실패: %s", claim.platform, claim.product_id, exc)
+                if isinstance(exc, AccessBlockedError):
+                    return collected
 
             try:
                 collected.reviews = await collector.get_reviews(
@@ -269,10 +280,12 @@ async def _collect(
                     ),
                 )
             except CollectorError as exc:
+                collected.failure_kinds.append(failure_kind(exc))
                 collected.errors.append(f"review: {exc}")
                 logger.warning("[%s/%s] 리뷰 수집 실패: %s", claim.platform, claim.product_id, exc)
     except Exception as exc:  # noqa: BLE001 - job 을 실패로 남기고 워커는 계속 돈다
         # 메시지가 비어 있는 예외(타임아웃 등)도 있어서 종류를 함께 남긴다.
+        collected.failure_kinds.append(failure_kind(exc))
         collected.errors.append(f"unexpected: {type(exc).__name__}: {exc}")
         logger.exception(
             "[%s/%s] collector 실행 중 예상치 못한 오류", claim.platform, claim.product_id
@@ -347,6 +360,8 @@ async def _finish(
     product_status: str,
     review_status: str,
     errors: list[str],
+    kind: str | None = None,
+    cooldown_seconds: int = 21600,
 ) -> None:
     try:
         async with session_factory() as session:
@@ -356,6 +371,8 @@ async def _finish(
                 product_status=product_status,
                 review_status=review_status,
                 error="; ".join(errors) if errors else None,
+                failure_kind=kind,
+                cooldown_seconds=cooldown_seconds,
             )
             await session.commit()
     except SQLAlchemyError:
