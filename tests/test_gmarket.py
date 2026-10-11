@@ -142,10 +142,7 @@ def test_parse_total_pages_and_review_body():
     assert collector._parse_total_pages(REVIEW_HTML) == 6
     assert collector._parse_total_pages("<html></html>") is None
     assert collector._review_body("4814731104", 1) == "goodsCode=4814731104&pageNo=1"
-    assert (
-        collector._review_body("4814731104", 2, 6)
-        == "goodsCode=4814731104&pageNo=2&totalPage=6"
-    )
+    assert collector._review_body("4814731104", 2, 6) == "goodsCode=4814731104&pageNo=2&totalPage=6"
 
 
 def test_cloudflare_response_is_detected():
@@ -165,3 +162,42 @@ async def test_empty_inputs_do_not_start_browser():
     assert await collector.search_products("", limit=10) == []
     assert await collector.search_products("텀블러", limit=0) == []
     assert await collector.get_reviews("555", limit=0) == []
+
+
+async def test_http_errors_are_reported_before_selector():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import pytest
+
+    from review_data.core.collection_failure import failure_kind
+    from review_data.core.exceptions import ParseError
+
+    collector = _collector()
+    for status, kind in [(403, "blocked"), (429, "blocked"), (404, "not_found"), (503, "network")]:
+        page = SimpleNamespace(
+            goto=AsyncMock(return_value=SimpleNamespace(status=status)),
+            content=AsyncMock(return_value=""),
+            wait_for_selector=AsyncMock(),
+        )
+        with pytest.raises(ParseError) as caught:
+            await collector._load_page(page, "https://example.com", "h1")
+        assert failure_kind(caught.value) == kind
+        page.wait_for_selector.assert_not_awaited()
+
+
+async def test_review_transport_error_does_not_claim_confirmed_block():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import pytest
+    from playwright.async_api import Error
+
+    from review_data.core.collection_failure import failure_kind
+    from review_data.core.exceptions import ParseError
+
+    page = SimpleNamespace(evaluate=AsyncMock(side_effect=Error("failed to fetch")))
+    with pytest.raises(ParseError) as caught:
+        await _collector()._fetch_review_html(page, "/review", "")
+    assert failure_kind(caught.value) == "parse"
+    assert "Cloudflare" not in str(caught.value)

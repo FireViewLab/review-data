@@ -1,16 +1,13 @@
 """
 옥션(auction.co.kr) collector.
 
-검색/상세 페이지 모두 Cloudflare 챌린지로 보호되어 있어(httpx 로는 403),
-Playwright 로 접근합니다. 리뷰는 상세 페이지가 호출하는 ReviewService(ASMX)
-엔드포인트를 페이지 컨텍스트의 fetch 로 그대로 사용합니다
-(브라우저가 이미 풀어둔 Cloudflare 클리어런스 쿠키를 재사용하기 위함).
+검색/상세 페이지는 Playwright로 열고, 리뷰는 상세 페이지 컨텍스트에서
+ReviewService(ASMX)에 요청합니다. 기존 셀렉터와 응답 형태는 단위 테스트로 검증합니다.
 
-⚠️ 알려진 제약: 옥션은 Cloudflare 봇 감지가 매우 엄격해서, 자동화된
-Playwright 브라우저는 대부분 챌린지 화면("잠시만 기다리십시오")에서 막힙니다.
-이 collector 는 실제 사이트 구조에 맞게 올바르게 구현되어 있지만, 봇 탐지를
-우회하는 기법(스텔스 패치, 프록시 로테이션 등)은 의도적으로 사용하지 않습니다.
-차단되면 원인을 알 수 있는 명확한 ParseError 로 실패합니다.
+2026-10-11 운영 서버 정상 접근 재검증에서 검색 단계가 차단됐습니다.
+따라서 현재 환경에서 상세·리뷰의 실제 수집 성공은 확인되지 않았습니다.
+확인된 차단은 AccessBlockedError로 중단하고 HTTP 장애·응답 형식 변경과 구분합니다.
+
 """
 
 import re
@@ -23,7 +20,7 @@ from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from review_data.core.browser import BrowserCollector
-from review_data.core.exceptions import ParseError
+from review_data.core.exceptions import AccessBlockedError, ParseError
 from review_data.core.models import Product, Review
 
 SEARCH_URL = "https://www.auction.co.kr/n/search"
@@ -31,9 +28,11 @@ DETAIL_URL = "http://itempage3.auction.co.kr/DetailView.aspx"
 REVIEW_API_PATH = "/WebService/ReviewService.asmx/GetReviewList"
 
 _BLOCKED_MARKER = "AUCTION_BLOCKED"
+_HTTP_ERROR_MARKER = "AUCTION_HTTP_ERROR"
+_FORMAT_ERROR_MARKER = "AUCTION_FORMAT_ERROR"
 
-# 응답이 JSON 이 아니면(Cloudflare 챌린지 HTML 등) 그대로 res.json() 을 호출해
-# 알아보기 힘든 SyntaxError 로 죽는 대신, 명시적으로 구분 가능한 에러를 던진다.
+# 접근 거부/요청 제한, HTTP 장애, JSON 구조 변경을 분리한다.
+# JSON이 아닌 응답만으로 접근 차단을 단정하지 않는다.
 _FETCH_REVIEW_LIST_JS = f"""
 async ({{ path, itemNo, pageIndex }}) => {{
     const res = await fetch(path, {{
@@ -47,10 +46,19 @@ async ({{ path, itemNo, pageIndex }}) => {{
         }}),
     }});
     const contentType = res.headers.get("content-type") || "";
-    if (!res.ok || !contentType.includes("json")) {{
-        throw new Error("{_BLOCKED_MARKER}");
+    if (res.status === 403 || res.status === 429) {{
+        throw new Error("{_BLOCKED_MARKER}:" + res.status);
+    }}
+    if (!res.ok) {{
+        throw new Error("{_HTTP_ERROR_MARKER}:" + res.status);
+    }}
+    if (!contentType.includes("json")) {{
+        throw new Error("{_FORMAT_ERROR_MARKER}");
     }}
     const data = await res.json();
+    if (!data || typeof data.d !== "string") {{
+        throw new Error("{_FORMAT_ERROR_MARKER}");
+    }}
     return data.d;
 }}
 """
@@ -132,10 +140,14 @@ async def _wait_for_real_page(
     page: Page, selector: str, platform: str, response: Response | None = None
 ) -> None:
     """확인된 차단은 즉시 실패하고, 정상 페이지에서만 콘텐츠를 기다린다."""
-    if response is not None and response.status == 403:
-        raise ParseError(f"{platform}: 페이지 접근이 차단되었습니다 (HTTP 403).")
+    if response is not None and response.status in {403, 429}:
+        raise AccessBlockedError(
+            f"{platform}: 페이지 접근이 차단되었습니다 (HTTP {response.status})."
+        )
+    if response is not None and response.status >= 400:
+        raise ParseError(f"{platform}: 페이지 요청 실패 (HTTP {response.status}).")
     if _is_blocked_page(await page.content()):
-        raise ParseError(
+        raise AccessBlockedError(
             f"{platform}: 페이지 접근이 차단되었습니다 (Cloudflare/CAPTCHA 차단 화면)."
         )
     try:
@@ -257,11 +269,22 @@ class AuctionCollector(BrowserCollector):
                     )
                 except PlaywrightError as exc:
                     if _BLOCKED_MARKER in str(exc):
+                        raise AccessBlockedError(
+                            f"{self.platform}: 리뷰 API 접근이 차단되었습니다 "
+                            "(접근 거부 또는 요청 제한)."
+                        ) from exc
+                    match = re.search(rf"{_HTTP_ERROR_MARKER}:(\d{{3}})", str(exc))
+                    if match:
                         raise ParseError(
-                            f"{self.platform}: 리뷰 API 접근이 차단된 것으로 보입니다 "
-                            "(HTTP 오류 또는 JSON이 아닌 응답)."
+                            f"{self.platform}: 리뷰 API 요청 실패 (HTTP {match.group(1)})."
+                        ) from exc
+                    if _FORMAT_ERROR_MARKER in str(exc):
+                        raise ParseError(
+                            f"{self.platform}: 리뷰 API 응답 형식이 예상과 다릅니다."
                         ) from exc
                     raise
+                if not isinstance(raw_html, str):
+                    raise ParseError(f"{self.platform}: 리뷰 API 응답 형식이 예상과 다릅니다.")
                 page_reviews = _parse_review_page(raw_html, self.platform, product_id)
                 if not page_reviews:
                     break
