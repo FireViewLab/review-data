@@ -18,7 +18,7 @@ from review_data.api.v1 import SessionDep
 from review_data.core.db.analysis_control import control_status, effective_analysis_settings
 from review_data.core.db.models import AnalysisRefreshControl
 from review_data.core.service.analysis_refresh import AnalysisRefreshService, campaign_status
-from review_data.core.service.operations import operational_status
+from review_data.core.service.operations import collection_metrics, operational_status
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import get_settings
 
@@ -172,13 +172,16 @@ async def overview(request: Request, session: SessionDep):
             return cached[1]
         settings = await effective_analysis_settings(session, get_settings())
         result = await operational_status(session)
+        metrics = await collection_metrics(session)
+        result["platforms"] = [
+            {key: row[key] for key in ("platform", "products", "reviews")} for row in metrics
+        ]
         result["resources"] = request.app.state.resource_metrics
         result["totals"] = (
             await rows(
                 session,
                 """
             SELECT (SELECT count(*) FROM products) AS products,
-                   (SELECT count(*) FROM reviews) AS reviews,
                    (SELECT count(*) FROM review_analyses a JOIN (
                        SELECT DISTINCT ON (platform,product_id) id FROM analysis_jobs
                        WHERE model_version=:model AND policy_version=:policy
@@ -193,6 +196,7 @@ async def overview(request: Request, session: SessionDep):
                 {"model": settings.ai_model_version, "policy": settings.ai_policy_version},
             )
         )[0]
+        result["totals"]["reviews"] = sum(row["reviews"] for row in metrics)
         result["rates_15m"] = (
             await rows(
                 session,
@@ -200,10 +204,6 @@ async def overview(request: Request, session: SessionDep):
             SELECT
                 (SELECT count(*) FROM collection_jobs WHERE completed_at>=now()-interval '15 min'
                   AND review_status='succeeded') AS collected_products,
-                (SELECT count(*) FROM reviews WHERE first_collected_at>=now()-interval '15 min')
-                  AS new_reviews,
-                (SELECT count(*) FROM reviews WHERE last_collected_at>=now()-interval '15 min')
-                  AS refreshed_reviews,
                 (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
                   WHERE locked_at>=now()-interval '15 min' AND attempt_count>0)
                   AS ai_claimed_reviews,
@@ -213,6 +213,8 @@ async def overview(request: Request, session: SessionDep):
         """,
             )
         )[0]
+        result["rates_15m"]["new_reviews"] = sum(row["new_reviews"] for row in metrics)
+        result["rates_15m"]["refreshed_reviews"] = sum(row["refreshed_reviews"] for row in metrics)
         result["workers"] = await rows(
             session,
             """
@@ -230,14 +232,6 @@ async def overview(request: Request, session: SessionDep):
             FROM worker_heartbeats w WHERE w.stopped_at IS NULL
                 AND w.last_seen_at>now()-interval '5 minutes'
             ORDER BY w.role,w.last_seen_at DESC
-        """,
-        )
-        result["platforms"] = await rows(
-            session,
-            """
-            SELECT p.platform,count(*) AS products,
-              (SELECT count(*) FROM reviews r WHERE r.platform=p.platform) AS reviews
-            FROM products p GROUP BY p.platform ORDER BY p.platform
         """,
         )
         result["timeline"] = await rows(

@@ -324,3 +324,44 @@ async def test_result_count_without_target_is_zero(session, dashboard_settings):
         )
         assert response.status_code == 200
         assert response.json()["totals"]["analysis_results"] == 0
+
+
+async def test_consolidated_collection_counts_include_zero_and_reobserved_platforms(
+    session, dashboard_settings
+):
+    now = datetime.now(UTC)
+    old = now - timedelta(days=2)
+    for platform in ("test-a", "test-b", "test-empty"):
+        session.add(ProductRow(platform=platform, product_id="p", name="상품", url="https://x"))
+    await session.flush()
+    for platform, rid, first, last in [
+        ("test-a", "old", old, old),
+        ("test-a", "observed", old, now),
+        ("test-b", "new", now, now),
+    ]:
+        session.add(
+            ReviewRow(
+                platform=platform,
+                product_id="p",
+                review_id=rid,
+                content="본문",
+                first_collected_at=first,
+                last_collected_at=last,
+            )
+        )
+    await session.commit()
+    with TestClient(module.app) as client:
+        response = client.get(
+            "/status/api/overview", headers={"X-Internal-Token": "data-only-secret"}
+        )
+        assert response.status_code == 200
+        d = response.json()
+        assert d["totals"]["products"] == 3
+        assert d["totals"]["reviews"] == 3
+        assert d["rates_15m"]["new_reviews"] == 1
+        assert d["rates_15m"]["refreshed_reviews"] == 2
+        assert d["platforms"] == [
+            {"platform": "test-a", "products": 1, "reviews": 2},
+            {"platform": "test-b", "products": 1, "reviews": 1},
+            {"platform": "test-empty", "products": 1, "reviews": 0},
+        ]
