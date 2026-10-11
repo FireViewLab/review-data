@@ -84,6 +84,25 @@ async def operational_status(session):
             )
         ).mappings()
     ]
+    result["collection_failure_causes"] = [
+        dict(row)
+        for row in (
+            await session.execute(
+                text("""
+                SELECT platform,coalesce(failure_kind,'legacy_unknown') AS failure_kind,
+                    count(*) AS count,
+                    count(*) FILTER (WHERE retry_after>now()) AS cooling_down,
+                    min(retry_after) FILTER (WHERE retry_after>now()) AS next_retry_at
+                FROM (
+                    SELECT DISTINCT ON(platform,product_id)
+                        platform,product_id,status,failure_kind,retry_after
+                    FROM collection_jobs ORDER BY platform,product_id,id DESC
+                ) j WHERE status IN ('partial','failed')
+                GROUP BY platform,failure_kind ORDER BY platform,failure_kind
+            """)
+            )
+        ).mappings()
+    ]
     result["discovery"] = [
         dict(row)
         for row in (
@@ -96,3 +115,31 @@ async def operational_status(session):
         ).mappings()
     ]
     return result
+
+
+async def collection_metrics(session):
+    """리뷰 전체/최근 관측/플랫폼 수를 한 번의 그룹 집계로 계산한다."""
+    return [
+        dict(row)
+        for row in (
+            await session.execute(
+                text("""
+            WITH review_counts AS (
+                SELECT platform,count(*) AS reviews,
+                    count(*) FILTER (WHERE first_collected_at>=now()-interval '15 minutes')
+                        AS new_reviews,
+                    count(*) FILTER (WHERE last_collected_at>=now()-interval '15 minutes')
+                        AS refreshed_reviews
+                FROM reviews GROUP BY platform
+            ), product_counts AS (
+                SELECT platform,count(*) AS products FROM products GROUP BY platform
+            )
+            SELECT p.platform,p.products,coalesce(r.reviews,0) AS reviews,
+                coalesce(r.new_reviews,0) AS new_reviews,
+                coalesce(r.refreshed_reviews,0) AS refreshed_reviews
+            FROM product_counts p LEFT JOIN review_counts r USING(platform)
+            ORDER BY p.platform
+        """)
+            )
+        ).mappings()
+    ]

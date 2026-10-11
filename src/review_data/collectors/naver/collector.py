@@ -5,6 +5,7 @@
 내부 API 를 직접 호출하거나 헤더·쿠키를 복제하지 않는다.
 
 - 스마트스토어(smartstore.naver.com)는 새 브라우저에서 첫 요청부터 캡차가 떠서 지원하지 않는다.
+- 기존 및 묶음 상품 리뷰 응답을 지원하고 묶음에서는 요청 상품의 리뷰만 받는다.
 - 리뷰는 리뷰 탭 첫 페이지(랭킹순, 최대 20건)만 받는다. 2026-10 화면에는 정렬 버튼이 없고
   스크롤·다음 버튼으로 2페이지 요청이 나가지 않는다.
 - 캡차·로그인·차단 응답이 보이면 바로 실패로 끝낸다. 재시도나 우회는 하지 않는다.
@@ -15,12 +16,13 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from review_data.core.browser import BrowserCollector
-from review_data.core.exceptions import NotSupportedError, ParseError
+from review_data.core.exceptions import AccessBlockedError, NotSupportedError, ParseError
 from review_data.core.models import Product, Review
 from review_data.core.settings import Settings, get_settings
 
@@ -31,7 +33,18 @@ PRODUCT_URL_PATTERN = re.compile(
     r"(?P<store>[^/?#]+)/products/(?P<product_no>\d+)"
 )
 REVIEW_PAGE_PATH = "/contents/reviews/query-pages"
-REVIEW_TAB_TEXT = re.compile(r"^리뷰\s*[\d,]+$")
+REVIEW_TAB_TEXT = re.compile(r"^리뷰(?:\s*\(?[\d,]+\)?)?$")
+GROUP_REVIEW_PAGE_PATH = "/contents/reviews/group-products/query-pages"
+
+
+def review_response_path(url: str) -> str | None:
+    path = urlsplit(url).path
+    for suffix in (REVIEW_PAGE_PATH, GROUP_REVIEW_PAGE_PATH):
+        if path.endswith(suffix):
+            return suffix
+    return None
+
+
 # 상품 페이지가 스스로 받아 오는 "같은 스토어의 다른 상품" 목록들.
 RELATED_PATHS = ("/simple-products", "/recommends/keep-cart", "/product-other-recommend/")
 RELATED_SCROLL_STEPS = 6
@@ -63,8 +76,7 @@ def parse_product_id(product_id: str) -> tuple[str, str]:
             "형식으로 입력하세요."
         )
     raise ParseError(
-        f"[naver] 상품 ID 형식이 올바르지 않습니다: {product_id!r} "
-        "(예: zinus:6000252751)"
+        f"[naver] 상품 ID 형식이 올바르지 않습니다: {product_id!r} (예: zinus:6000252751)"
     )
 
 
@@ -116,13 +128,23 @@ def parse_product(data: dict, product_id: str) -> Product:
     )
 
 
-def parse_reviews(data: dict, product_id: str, limit: int) -> list[Review]:
+def parse_reviews(
+    data: dict, product_id: str, limit: int, *, grouped: bool = False
+) -> list[Review]:
     contents = data.get("contents")
     if not isinstance(contents, list):
         raise ParseError("[naver] 리뷰 응답 형식이 예상과 다릅니다.")
 
+    _, product_no = parse_product_id(product_id)
     reviews: list[Review] = []
     for item in contents:
+        if not isinstance(item, dict):
+            continue
+        source_product = item.get("productNo") or item.get("originProductNo")
+        if (source_product is not None and str(source_product) != product_no) or (
+            grouped and source_product is None
+        ):
+            continue
         content = (item.get("reviewContent") or "").strip()
         review_id = item.get("id")
         # 내용이 없는 리뷰(별점만)는 표준 모델 제약상 저장할 수 없다.
@@ -192,6 +214,7 @@ class _PageCapture:
 
     product: dict | None = None
     reviews: dict | None = None
+    grouped_reviews: bool = False
     related: list[Any] = field(default_factory=list)
     product_ready: asyncio.Event = field(default_factory=asyncio.Event)
     reviews_ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -204,9 +227,7 @@ class NaverCollector(BrowserCollector):
     def __init__(self, settings: Settings | None = None) -> None:
         # 오늘의집과 같은 이유로 화면 모드로 띄운다. 전역 설정은 바꾸지 않는다.
         source_settings = settings or get_settings()
-        super().__init__(
-            settings=source_settings.model_copy(update={"headless": False}, deep=True)
-        )
+        super().__init__(settings=source_settings.model_copy(update={"headless": False}, deep=True))
         # 워커와 CLI 는 한 collector 로 상품과 리뷰를 차례로 부른다. 한 번 방문한 결과를
         # 재사용해 job 당 페이지 방문을 1회로 줄인다.
         self._captures: dict[str, _PageCapture] = {}
@@ -231,7 +252,7 @@ class NaverCollector(BrowserCollector):
             if total == 0:
                 return []
             raise ParseError(f"[naver] 리뷰 목록을 받지 못했습니다: {product_id}")
-        return parse_reviews(capture.reviews, product_id, limit)
+        return parse_reviews(capture.reviews, product_id, limit, grouped=capture.grouped_reviews)
 
     async def related_products(self, product_id: str, limit: int = 20) -> list[str]:
         if limit <= 0:
@@ -269,8 +290,17 @@ class NaverCollector(BrowserCollector):
             if capture.product is None and product_path.search(response.url):
                 capture.product = await response.json()
                 capture.product_ready.set()
-            elif capture.reviews is None and response.url.endswith(REVIEW_PAGE_PATH):
-                capture.reviews = await response.json()
+            elif capture.reviews is None and review_response_path(response.url):
+                try:
+                    payload = await response.json()
+                except (ValueError, TypeError):
+                    return
+                if not isinstance(payload, dict) or not isinstance(payload.get("contents"), list):
+                    return
+                capture.reviews = payload
+                capture.grouped_reviews = (
+                    review_response_path(response.url) == GROUP_REVIEW_PAGE_PATH
+                )
                 capture.reviews_ready.set()
             elif any(path in response.url for path in RELATED_PATHS):
                 capture.related.append(await response.json())
@@ -302,7 +332,7 @@ class NaverCollector(BrowserCollector):
 
         status = response.status if response is not None else None
         if is_blocked(status, await page.content(), page.url):
-            raise ParseError(
+            raise AccessBlockedError(
                 f"[naver] 접근이 차단됐습니다 (캡차·로그인·HTTP {status}). "
                 "우회하지 않고 중단합니다."
             )
@@ -318,6 +348,9 @@ class NaverCollector(BrowserCollector):
             await tab.wait_for(state="visible", timeout=REVIEW_TAB_TIMEOUT_MS)
         except PlaywrightTimeoutError:
             return  # 리뷰가 없는 상품은 탭에 개수가 붙지 않는다.
+        bare = page.get_by_text("리뷰", exact=True).locator("visible=true").first
+        if await bare.count():
+            tab = bare
         await tab.scroll_into_view_if_needed()
         # 탭 위에 고정 헤더가 겹쳐 일반 클릭이 막힌다. 사람이 누르는 것과 같은 클릭 이벤트다.
         await tab.click(force=True)
