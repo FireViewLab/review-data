@@ -214,3 +214,46 @@ async def test_review_api_block_fails_without_retry(collector_page):
     page.evaluate.assert_awaited_once()
     collector.polite_wait.assert_not_awaited()
     closed.assert_awaited_once()
+
+
+@pytest.mark.parametrize("status,kind", [(429, "blocked"), (404, "not_found"), (503, "network")])
+async def test_http_failure_is_classified_before_selector(collector_page, status, kind):
+    from review_data.core.collection_failure import failure_kind
+
+    collector, page, closed = collector_page
+    page.goto.return_value = SimpleNamespace(status=status)
+    with pytest.raises(ParseError) as caught:
+        await collector.get_product("123")
+    assert failure_kind(caught.value) == kind
+    page.wait_for_selector.assert_not_awaited()
+    page.evaluate.assert_not_awaited()
+    closed.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "marker,kind",
+    [
+        ("AUCTION_HTTP_ERROR:503", "network"),
+        ("AUCTION_HTTP_ERROR:404", "not_found"),
+        ("AUCTION_FORMAT_ERROR", "parse"),
+        ("AUCTION_BLOCKED:429", "blocked"),
+    ],
+)
+async def test_review_http_and_format_failures_are_not_all_blocked(collector_page, marker, kind):
+    from review_data.core.collection_failure import failure_kind
+
+    collector, page, closed = collector_page
+    page.evaluate.side_effect = PlaywrightError(marker)
+    with pytest.raises(ParseError) as caught:
+        await collector.get_reviews("123")
+    assert failure_kind(caught.value) == kind
+    page.evaluate.assert_awaited_once()
+    collector.polite_wait.assert_not_awaited()
+    closed.assert_awaited_once()
+
+
+async def test_invalid_review_payload_does_not_become_empty_success(collector_page):
+    collector, page, _ = collector_page
+    page.evaluate.return_value = None
+    with pytest.raises(ParseError, match="응답 형식"):
+        await collector.get_reviews("123")

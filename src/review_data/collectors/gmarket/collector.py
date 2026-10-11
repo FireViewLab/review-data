@@ -21,7 +21,7 @@ from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from review_data.core.browser import BrowserCollector
-from review_data.core.exceptions import ParseError
+from review_data.core.exceptions import AccessBlockedError, ParseError
 from review_data.core.models import Product, Review
 
 SEARCH_URL = "https://www.gmarket.co.kr/n/search"
@@ -164,10 +164,12 @@ class GmarketCollector(BrowserCollector):
         status = response.status if response is not None else None
         if _is_blocked(status, html):
             status_text = f"HTTP {status}" if status is not None else "응답 없음"
-            raise ParseError(
+            raise AccessBlockedError(
                 f"{self.platform}: G마켓이 자동화 브라우저 요청을 차단했습니다 "
                 f"(Cloudflare 봇 확인, {status_text})."
             )
+        if status is not None and status >= 400:
+            raise ParseError(f"{self.platform}: 페이지 요청 실패 (HTTP {status}).")
 
     async def search_products(self, keyword: str, limit: int = 20) -> list[Product]:
         if not keyword or limit <= 0:
@@ -182,9 +184,7 @@ class GmarketCollector(BrowserCollector):
         if not cards:
             if _has_empty_marker(html, _SEARCH_EMPTY_MARKERS):
                 return []
-            raise ParseError(
-                f"{self.platform}: 검색 페이지에서 상품 카드를 찾지 못했습니다."
-            )
+            raise ParseError(f"{self.platform}: 검색 페이지에서 상품 카드를 찾지 못했습니다.")
 
         products: list[Product] = []
         seen: set[str] = set()
@@ -199,9 +199,7 @@ class GmarketCollector(BrowserCollector):
         if not products:
             if _has_empty_marker(html, _SEARCH_EMPTY_MARKERS):
                 return []
-            raise ParseError(
-                f"{self.platform}: 검색 상품 카드의 구조가 예상과 다릅니다."
-            )
+            raise ParseError(f"{self.platform}: 검색 상품 카드의 구조가 예상과 다릅니다.")
         return products
 
     def _parse_search_card(self, card) -> Product | None:
@@ -326,9 +324,7 @@ class GmarketCollector(BrowserCollector):
                 _to_int(aggregate.get("reviewCount")) if isinstance(aggregate, dict) else None
             ),
             rating=(
-                _to_float(aggregate.get("ratingValue"))
-                if isinstance(aggregate, dict)
-                else None
+                _to_float(aggregate.get("ratingValue")) if isinstance(aggregate, dict) else None
             ),
         )
 
@@ -353,9 +349,7 @@ class GmarketCollector(BrowserCollector):
             if not first_page:
                 if total_pages == 0 or _has_empty_marker(shell_html, _REVIEW_EMPTY_MARKERS):
                     return []
-                raise ParseError(
-                    f"{self.platform}: 상품평 응답에서 상품평 행을 찾지 못했습니다."
-                )
+                raise ParseError(f"{self.platform}: 상품평 응답에서 상품평 행을 찾지 못했습니다.")
             self._append_unique(reviews, seen, first_page, limit)
 
             if total_pages is None and len(first_page) >= REVIEW_PAGE_SIZE and len(reviews) < limit:
@@ -385,10 +379,7 @@ class GmarketCollector(BrowserCollector):
         try:
             result = await page.evaluate(_FETCH_REVIEW_HTML_JS, {"path": path, "body": body})
         except PlaywrightError as exc:
-            raise ParseError(
-                f"{self.platform}: 상품평 요청이 거부되었습니다 "
-                "(Cloudflare 자동화 감지 가능성)."
-            ) from exc
+            raise ParseError(f"{self.platform}: 상품평 요청을 완료하지 못했습니다.") from exc
 
         if not isinstance(result, dict):
             raise ParseError(f"{self.platform}: 상품평 응답 형식이 예상과 다릅니다.")
@@ -397,7 +388,7 @@ class GmarketCollector(BrowserCollector):
         if not isinstance(status, int) or not isinstance(html, str):
             raise ParseError(f"{self.platform}: 상품평 응답 형식이 예상과 다릅니다.")
         if _is_blocked(status, html):
-            raise ParseError(
+            raise AccessBlockedError(
                 f"{self.platform}: G마켓이 상품평 요청을 차단했습니다 "
                 f"(Cloudflare 봇 확인, HTTP {status})."
             )
@@ -406,9 +397,7 @@ class GmarketCollector(BrowserCollector):
         return html
 
     @staticmethod
-    def _review_body(
-        product_id: str, page_number: int, total_pages: int | None = None
-    ) -> str:
+    def _review_body(product_id: str, page_number: int, total_pages: int | None = None) -> str:
         fields = [f"goodsCode={quote(product_id)}", f"pageNo={page_number}"]
         if total_pages is not None:
             fields.append(f"totalPage={total_pages}")
