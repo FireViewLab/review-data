@@ -192,3 +192,56 @@ def test_parse_related_respects_limit():
     )
 
     assert related == ["zinus:9524657101", "zinus:11887628580"]
+
+
+def test_review_response_paths_allow_query_and_group_route_only():
+    from review_data.collectors.naver.collector import review_response_path
+
+    assert review_response_path("https://brand.naver.com/n/v1/contents/reviews/query-pages?page=1")
+    assert review_response_path(
+        "https://brand.naver.com/n/v1/contents/reviews/group-products/query-pages"
+    )
+    assert (
+        review_response_path(
+            "https://brand.naver.com/n/v1/contents/reviews/group-products/product-summary/1"
+        )
+        is None
+    )
+    assert (
+        review_response_path("https://brand.naver.com/contents/reviews/query-pages-unrelated")
+        is None
+    )
+
+
+def test_review_tab_accepts_bare_and_count_labels_but_not_related_actions():
+    from review_data.collectors.naver.collector import REVIEW_TAB_TEXT
+
+    for label in ("리뷰", "리뷰 1", "리뷰(1,200)", "리뷰 20"):
+        assert REVIEW_TAB_TEXT.fullmatch(label)
+    for label in ("리뷰 전체보기", "리뷰이벤트", "리뷰 작성"):
+        assert not REVIEW_TAB_TEXT.fullmatch(label)
+
+
+def test_group_reviews_only_include_requested_product_and_require_identity():
+    data = _load("reviews.json")
+    data["contents"][0]["productNo"] = 6000252751
+    data["contents"][0]["originProductNo"] = 999
+    data["contents"][1]["productNo"] = 999
+    # A missing identity must not cause another group's review to be attached to this product.
+    result = parse_reviews(data, PRODUCT_ID, 20, grouped=True)
+    assert [r.review_id for r in result] == ["5049864928"]
+
+
+async def test_visible_bare_review_tab_preferred_over_related_review_count():
+    from unittest.mock import AsyncMock, MagicMock
+
+    page = MagicMock()
+    counted, bare = AsyncMock(), AsyncMock()
+    bare.count.return_value = 1
+    labels = [MagicMock(), MagicMock()]
+    labels[0].locator.return_value.first = counted
+    labels[1].locator.return_value.first = bare
+    page.get_by_text.side_effect = labels
+    await NaverCollector()._open_review_tab(page)
+    bare.click.assert_awaited_once()
+    counted.click.assert_not_awaited()
