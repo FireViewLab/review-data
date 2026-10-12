@@ -185,6 +185,32 @@ def test_overview_returns_last_snapshot_and_refreshes_in_background(engine, dash
         assert module.app.state.status_cache is None
 
 
+def test_live_is_fast_subset_and_refresh_forces_slow_totals(engine, dashboard_settings):
+    import time
+
+    with TestClient(module.app) as client:
+        assert client.get("/status/api/live").status_code == 401
+        client.post("/status/login", json={"token": "data-only-secret"})
+        live = client.get("/status/api/live").json()
+        # 실시간 응답에는 리뷰 전체를 훑는 합계가 없다.
+        assert {"queues", "workers", "analysis_campaigns", "settings", "discovery"} <= set(live)
+        assert not {"totals", "platforms", "timeline"} & set(live)
+        assert "new_reviews" not in live["rates_15m"]
+
+        first = client.get("/status/api/overview").json()
+        assert {"totals", "platforms", "timeline", "queues", "workers"} <= set(first)
+        assert "new_reviews" in first["rates_15m"]
+        # 주기(1분) 안이어도 새로고침 요청은 갱신을 바로 시작한다.
+        assert client.get("/status/api/overview").json()["refreshing"] is False
+        assert client.get("/status/api/overview?refresh=true").json()["refreshing"] is True
+        for _ in range(100):
+            fresh = client.get("/status/api/overview").json()
+            if fresh["checked_at"] != first["checked_at"]:
+                break
+            time.sleep(0.05)
+        assert fresh["checked_at"] != first["checked_at"]
+
+
 def test_expired_and_tampered_sessions_fail(engine, dashboard_settings):
     with TestClient(module.app) as client:
         for value in [

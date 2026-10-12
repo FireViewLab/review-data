@@ -870,7 +870,6 @@
         detailHistory = [],
         detailNext = null,
         overviewData = null,
-        followUp = null,
         listGeneration = 0,
         detailGeneration = 0;
       async function api(path, options = {}) {
@@ -1051,16 +1050,21 @@
           r = d.resources,
           q = d.queues,
           rate = d.rates_15m;
+        const pendingTotal = "집계 중";
         $("totals").innerHTML =
           card(
             "등록 상품",
-            num(t.products),
-            "리뷰 없는 상품 " + num(t.empty_products) + "개 포함",
+            t ? num(t.products) : pendingTotal,
+            t ? "리뷰 없는 상품 " + num(t.empty_products) + "개 포함" : "",
           ) +
-          card("저장 리뷰", num(t.reviews), "중복 통합 전 원본 DB 행 수") +
+          card(
+            "저장 리뷰",
+            t ? num(t.reviews) : pendingTotal,
+            "중복 통합 전 원본 DB 행 수",
+          ) +
           card(
             "저장 분석 결과",
-            num(t.analysis_results),
+            t ? num(t.analysis_results) : pendingTotal,
             d.settings.target_model_version && d.settings.target_policy_version
               ? `목표 ${esc(d.settings.target_model_version)} / ${esc(d.settings.target_policy_version)} · 상품별 최신 성공 결과`
               : "목표 모델·정책 버전 미설정",
@@ -1112,10 +1116,14 @@
         $("rates").innerHTML =
           card(
             "신규 리뷰 저장 / 분",
-            (rate.new_reviews / 15).toFixed(1),
-            "최근 15분 · 갱신 포함 " +
-              (rate.refreshed_reviews / 15).toFixed(1) +
-              "건/분",
+            rate.new_reviews == null
+              ? pendingTotal
+              : (rate.new_reviews / 15).toFixed(1),
+            rate.new_reviews == null
+              ? "최근 15분"
+              : "최근 15분 · 갱신 포함 " +
+                  (rate.refreshed_reviews / 15).toFixed(1) +
+                  "건/분",
           ) +
           card(
             "수집 완료 상품 / 분",
@@ -1132,7 +1140,9 @@
             (rate.ai_completed_reviews / 15).toFixed(1),
             "done 작업의 입력 리뷰 건수 기준",
           );
-        chart(d.timeline);
+        if (d.timeline.length) chart(d.timeline);
+        else if (!$("chart").innerHTML)
+          $("chart").innerHTML = '<div class="spinner">집계 중…</div>';
         const roles = {
           collection: "수집 워커",
           analysis: "분석 워커",
@@ -1291,27 +1301,88 @@
         $("previous").disabled = !history.length;
         $("next").disabled = nextCursor == null;
       }
-      async function refresh() {
-        if (busy || !$("login-modal").classList.contains("hidden")) return;
+      // 대기열·워커·캠페인은 5초마다, 리뷰 전체를 세는 합계는 1분마다 갱신한다.
+      const slowDefaults = {
+        totals: null,
+        platforms: [],
+        timeline: [],
+        latest_analysis: [],
+        empty_products: [],
+        collection_failures: [],
+        collection_failure_causes: [],
+      };
+      let liveData = null,
+        slowData = null,
+        slowBusy = false,
+        slowTimer = null,
+        liveTicks = 0;
+      function renderMerged() {
+        if (!liveData && !slowData) return;
+        const live = liveData || slowData,
+          slow = slowData || {};
+        renderOverview({
+          ...slowDefaults,
+          ...slow,
+          ...live,
+          rates_15m: { ...(slow.rates_15m || {}), ...live.rates_15m },
+        });
+        $("connection").innerHTML = '<i class="dot"></i>실시간';
+        $("updated").textContent = !slowData
+          ? "합계 집계 중…"
+          : "합계 " +
+            date(slowData.checked_at) +
+            " 기준" +
+            (slowData.refreshing ? " · 갱신 중…" : "");
+      }
+      function loggedOut() {
+        return !$("login-modal").classList.contains("hidden");
+      }
+      function showFailure(e) {
+        $("error-banner").textContent = e.message;
+        $("error-banner").classList.remove("hidden");
+        $("connection").textContent = "연결 확인 필요";
+      }
+      async function refreshLive() {
+        if (busy || loggedOut()) return;
         busy = true;
         try {
-          const d = await api("/api/overview");
-          renderOverview(d);
-          if (tab !== "overview") await loadList();
-          $("updated").textContent =
-            date(d.checked_at) + " 기준" + (d.refreshing ? " · 갱신 중" : "");
-          // 직전 집계를 먼저 받은 경우 새 집계가 끝나는 대로 다시 읽는다.
-          clearTimeout(followUp);
-          if (d.refreshing) followUp = setTimeout(refresh, 2000);
-          $("connection").innerHTML = '<i class="dot"></i>10초 자동 갱신';
+          liveData = await api("/api/live");
+          renderMerged();
+          if (tab !== "overview" && liveTicks++ % 2 === 0) await loadList();
           $("error-banner").classList.add("hidden");
         } catch (e) {
-          $("error-banner").textContent = e.message;
-          $("error-banner").classList.remove("hidden");
-          $("connection").textContent = "연결 확인 필요";
+          showFailure(e);
         } finally {
           busy = false;
         }
+      }
+      async function refreshSlow(force) {
+        if (loggedOut()) return;
+        if (slowBusy) return;
+        slowBusy = true;
+        clearTimeout(slowTimer);
+        let next = 60000;
+        try {
+          slowData = await api("/api/overview" + (force ? "?refresh=true" : ""));
+          // 직전 합계를 먼저 받은 경우 새 합계가 끝나는 대로 다시 읽는다.
+          if (slowData.refreshing) next = 2000;
+          renderMerged();
+        } catch (e) {
+          showFailure(e);
+          next = 10000;
+        } finally {
+          slowBusy = false;
+          slowTimer = setTimeout(refreshSlow, next);
+        }
+      }
+      async function refresh() {
+        // 새로고침: 실시간 영역은 바로 다시 읽고, 합계는 갱신을 요청한 뒤 진행을 표시한다.
+        if (slowData) {
+          slowData = { ...slowData, refreshing: true };
+          renderMerged();
+        }
+        refreshSlow(true);
+        await refreshLive();
       }
       function switchTab(next) {
         listGeneration++;
@@ -1579,8 +1650,9 @@
       };
       $("pause-refresh").onclick = () => refreshAction("pause");
       $("retry-refresh").onclick = () => refreshAction("retry-failed");
-      refresh();
-      setInterval(refresh, 10000);
+      refreshLive();
+      refreshSlow();
+      setInterval(refreshLive, 5000);
     </script>
   </body>
 </html>
