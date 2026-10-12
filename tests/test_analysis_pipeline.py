@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select, update
 
 from review_data.core.analysis_stream import AnalysisStreamError, AnalysisStreamResult
-from review_data.core.db.analysis_repository import AnalysisRepository
+from review_data.core.db.analysis_repository import FAILURE_REASONS, AnalysisRepository
 from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow, ReviewRow
 from review_data.core.settings import Settings
 from review_data.worker.analysis_worker import run_once
@@ -134,6 +134,32 @@ async def test_changed_input_during_request_discards_old_results(session_factory
         assert (await s.get(AnalysisJob, old)).status == "stale"
         assert list(await s.scalars(select(ReviewAnalysisRow))) == []
         assert (await AnalysisRepository(s).status("kurly", "p", config()))["status"] == "queued"
+
+
+@pytest.mark.parametrize(
+    "error,kind",
+    [
+        (TimeoutError(), "timeout"),
+        (AnalysisStreamError("x", retryable=True, kind="conflict"), "conflict"),
+        (AnalysisStreamError("x", retryable=True, kind="transport"), "transport"),
+        (AnalysisStreamError("x", retryable=True), "validation"),
+    ],
+)
+async def test_failure_cause_is_classified_and_conflict_waits_longer(session_factory, error, kind):
+    job = await seed(session_factory)
+    settings = config(ai_timeout_seconds=40)
+
+    async def fail(kwargs):
+        raise error
+
+    before = datetime.now(UTC)
+    await run_once(session_factory, "w", settings=settings, client=Client(fail))
+    async with session_factory() as s:
+        row = await s.get(AnalysisJob, job)
+        assert row.status == "queued" and row.last_error == FAILURE_REASONS[kind]
+        wait = (row.available_at - before).total_seconds()
+        # 처리 중 충돌은 앞선 요청이 끝날 시간을 두고, 나머지는 기존 30초 대기를 유지한다.
+        assert (79 < wait < 90) if kind == "conflict" else (29 < wait < 40)
 
 
 @pytest.mark.parametrize("retryable,status", [(True, "queued"), (False, "failed")])

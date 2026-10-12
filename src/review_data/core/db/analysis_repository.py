@@ -42,6 +42,20 @@ def published_order(settings: Settings):
     return (*([and_(*matches).desc()] if matches else []), AnalysisJob.id.desc())
 
 
+# last_error에는 원본 오류 대신 아래 고정 문구만 남긴다. 운영 화면은 문구로 원인을 구분한다.
+FAILURE_REASONS = {
+    "timeout": "AI 응답 시간 초과",
+    "conflict": "AI가 같은 작업을 처리 중",
+    "http": "AI 서버 HTTP 오류",
+    "transport": "AI 서버 연결 실패",
+    "ai_error": "AI 서버 오류 응답",
+    "storage": "분석 결과 저장 실패",
+    "validation": "AI 응답 검증 실패",
+    "exhausted": "분석 최대 시도 횟수 초과",
+}
+FAILURE_KINDS = {reason: kind for kind, reason in FAILURE_REASONS.items()}
+
+
 class AnalysisRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -167,7 +181,7 @@ class AnalysisRepository:
                 AnalysisJob.lease_expires_at <= now,
                 AnalysisJob.attempt_count >= AnalysisJob.max_attempts,
             )
-            .values(status="failed", last_error="분석 최대 시도 횟수 초과", completed_at=now)
+            .values(status="failed", last_error=FAILURE_REASONS["exhausted"], completed_at=now)
         )
         campaign_filter = True
         if backfill_only:
@@ -279,17 +293,25 @@ class AnalysisRepository:
         await self.session.flush()
         return True
 
-    async def fail(self, job_id: int, worker_id: str, retryable: bool):
+    async def fail(
+        self,
+        job_id: int,
+        worker_id: str,
+        retryable: bool,
+        kind: str = "validation",
+        min_delay: float = 0,
+    ):
         job = await self._owned(job_id, worker_id)
         if job is None:
             return False
         now = datetime.now(UTC)
         retry = retryable and job.attempt_count < job.max_attempts
         job.status = "queued" if retry else "failed"
-        job.last_error = "분석 요청 또는 응답 검증 실패"
+        job.last_error = FAILURE_REASONS.get(kind, FAILURE_REASONS["validation"])
         job.lease_expires_at = None
         job.locked_by = None
-        job.available_at = now + timedelta(seconds=min(30 * 2 ** (job.attempt_count - 1), 300))
+        delay = max(min(30 * 2 ** (job.attempt_count - 1), 300), min_delay)
+        job.available_at = now + timedelta(seconds=delay)
         job.completed_at = None if retry else now
         return True
 

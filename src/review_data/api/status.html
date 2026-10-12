@@ -336,6 +336,36 @@
       .error {
         color: var(--red);
       }
+      #refresh-panel > summary {
+        cursor: pointer;
+      }
+      #refresh-panel > summary h2 {
+        display: inline-block;
+        margin: 0;
+      }
+      #refresh-panel[open] > summary {
+        margin-bottom: 10px;
+      }
+      .summary-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin: 14px 0 4px;
+      }
+      .summary-stats > div {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .summary-stats span,
+      .summary-stats small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .summary-stats strong {
+        font-size: 15px;
+      }
       .empty {
         padding: 30px;
         text-align: center;
@@ -452,7 +482,13 @@
       }
       .login-dialog input {
         width: 100%;
-        margin: 16px 0 12px;
+        margin: 0 0 12px;
+      }
+      .login-dialog p {
+        margin: 16px 0;
+      }
+      .login-dialog .link {
+        margin-top: 12px;
       }
       .login-dialog .btn {
         width: 100%;
@@ -567,7 +603,7 @@
       }
     </style>
   </head>
-  <body>
+  <body data-spring-login="0">
     <aside>
       <div class="brand">Re:<em>view</em><small>DATA OPERATIONS</small></div>
       <button class="nav active" data-tab="overview">
@@ -597,8 +633,18 @@
       </header>
       <div id="error-banner" class="notice hidden" role="alert"></div>
       <section id="overview-view">
-        <div class="panel" style="margin-bottom: 20px">
-          <h2>모델 버전별 재분석</h2>
+        <div
+          id="backfill-summary"
+          class="panel hidden"
+          style="margin-bottom: 20px"
+        ></div>
+        <details
+          id="refresh-panel"
+          class="panel"
+          style="margin-bottom: 20px"
+          open
+        >
+          <summary><h2>모델 버전별 재분석</h2></summary>
           <p class="sub">
             AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
             맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
@@ -636,7 +682,7 @@
             aria-live="polite"
           ></div>
           <div id="campaigns"></div>
-        </div>
+        </details>
         <div class="cards" id="totals"></div>
         <div class="section-title">서버 자원</div>
         <div class="cards" id="resources"></div>
@@ -719,20 +765,41 @@
     <div id="login-modal" class="modal hidden">
       <form class="dialog login-dialog" id="login-form">
         <h2>운영 대시보드 로그인</h2>
-        <p>Data 서버 내부 토큰을 입력해 주세요.</p>
-        <input
-          id="token"
-          type="password"
-          autocomplete="off"
-          placeholder="X-Internal-Token"
-          required
-          aria-label="내부 토큰"
-        /><button class="btn primary">로그인</button>
+        <div id="login-account">
+          <p>re-view 관리자 계정으로 로그인해 주세요.</p>
+          <input
+            id="email"
+            type="email"
+            name="username"
+            autocomplete="username"
+            placeholder="이메일"
+            aria-label="이메일"
+          /><input
+            id="password"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            placeholder="비밀번호"
+            aria-label="비밀번호"
+          />
+        </div>
+        <div id="login-token" class="hidden">
+          <p>Data 서버 내부 토큰을 입력해 주세요.</p>
+          <input
+            id="token"
+            type="password"
+            autocomplete="off"
+            placeholder="X-Internal-Token"
+            aria-label="내부 토큰"
+          />
+        </div>
+        <button class="btn primary">로그인</button>
         <div id="login-error" class="sub error" role="alert"></div>
         <div class="sub">
-          AI 서버 토큰과는 별개입니다.<br />인증은 8시간 유지되며 토큰을
+          <span id="login-note"></span><br />인증은 8시간 유지되며 입력값을
           브라우저 저장소에 보관하지 않습니다.
         </div>
+        <button type="button" class="link hidden" id="login-mode"></button>
       </form>
     </div>
     <div id="detail-modal" class="modal hidden">
@@ -821,13 +888,13 @@
         if (r.status === 401) {
           $("login-modal").classList.remove("hidden");
           $("connection").textContent = "인증 필요";
-          throw Error("운영 토큰으로 로그인해 주세요.");
+          throw Error("로그인해 주세요.");
         }
         if (!r.ok) {
           const failure = await r.json().catch(() => null);
           throw Error(
-            typeof failure?.detail === "string"
-              ? failure.detail
+            typeof failure?.error?.message === "string"
+              ? failure.error.message
               : "조회에 실패했습니다 (" +
                   r.status +
                   "). 잠시 후 다시 시도해 주세요.",
@@ -867,6 +934,110 @@
             svg += `<text x="${p + i * step}" y="177" text-anchor="middle" fill="#8593a7" font-size="10">${esc(new Date(x.bucket).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))}</text>`;
         });
         $("chart").innerHTML = svg + "</svg>";
+      }
+      const failureKinds = {
+        timeout: "AI 응답 시간 초과",
+        conflict: "AI가 같은 작업을 처리 중 (409)",
+        http: "AI 서버 HTTP 오류",
+        transport: "AI 서버 연결 실패",
+        ai_error: "AI 서버 오류 응답",
+        storage: "분석 결과 저장 실패",
+        validation: "AI 응답 검증 실패",
+        exhausted: "최대 시도 횟수 초과",
+        legacy_unknown: "원인 미기록 (구분 기록 이전)",
+      };
+      function duration(from, to) {
+        const minutes = Math.max(0, Math.round((new Date(to) - new Date(from)) / 60000));
+        const days = Math.floor(minutes / 1440),
+          hours = Math.floor((minutes % 1440) / 60);
+        return (
+          (days ? days + "일 " : "") +
+          (days || hours ? hours + "시간 " : "") +
+          (minutes % 60) +
+          "분"
+        );
+      }
+      function discoveryState(d) {
+        const s = d.settings,
+          analysis = Number(d.queues.analysis.waiting) + Number(d.queues.analysis.running);
+        if (!s.discovery_enabled) return ["offline", "비활성", ""];
+        if (s.collection_paused)
+          return ["partial", "대기", "Backfill 진행 중에는 발굴을 쉽니다."];
+        if (analysis >= s.discovery_max_analysis_pending)
+          return [
+            "partial",
+            "대기",
+            `분석 대기열 ${num(analysis)}건이 기준 ${num(s.discovery_max_analysis_pending)}건 이상이라 발굴을 건너뜁니다.`,
+          ];
+        if (Number(d.queues.collection.waiting) >= s.schedule_max_pending)
+          return [
+            "partial",
+            "대기",
+            `수집 대기 ${num(d.queues.collection.waiting)}건이 기준 ${num(s.schedule_max_pending)}건 이상이라 발굴을 건너뜁니다.`,
+          ];
+        return ["alive", "활성", ""];
+      }
+      let refreshPanelMode = null;
+      function renderBackfillSummary(d) {
+        const c = (d.analysis_campaigns || [])[0];
+        const finished = c && c.status !== "running" && c.completed_at;
+        const mode = finished ? "finished" : "active";
+        if (mode !== refreshPanelMode) {
+          // 종료 후에는 제어 영역을 접어 두고, 사용자가 연 상태는 새로고침에서 유지한다.
+          $("refresh-panel").open = !finished;
+          refreshPanelMode = mode;
+        }
+        if (!finished) {
+          $("backfill-summary").classList.add("hidden");
+          return;
+        }
+        const failed = Number(c.failed),
+          target = Number(c.total) - Number(c.skipped),
+          applied = target ? (100 * Number(c.done)) / target : 100,
+          q = d.queues,
+          [discoveryClass, discoveryLabel, discoveryReason] = discoveryState(d),
+          failures = c.failures || [];
+        $("backfill-summary").classList.remove("hidden");
+        $("backfill-summary").innerHTML =
+          `<h2>Backfill 종료 <span class="pill ${failed ? "partial" : "alive"}">${failed ? `완료 · 실패 ${num(failed)}건` : "완료"}</span></h2>` +
+          `<div class="sub">#${c.id} ${esc(c.model_version)} · 정책 ${esc(c.policy_version)}</div>` +
+          `<div class="summary-stats">` +
+          [
+            ["종료 시각", date(c.completed_at)],
+            ["소요 시간", duration(c.created_at, c.completed_at)],
+            ["완료 / 대상", `${num(c.done)} / ${num(target)}`],
+            ["목표 버전 적용률", applied.toFixed(2) + "%"],
+            ["실패", num(failed)],
+          ]
+            .map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`)
+            .join("") +
+          `</div>` +
+          (failed
+            ? `<div class="section-title">실패 건 <button class="btn" id="retry-failed-inline">실패 건 재시도</button></div>` +
+              `<div class="table-wrap"><table><thead><tr><th>상품</th><th>작업</th><th>실패 원인</th><th>시도</th><th>실패 시각</th></tr></thead><tbody>` +
+              failures
+                .map(
+                  (f) =>
+                    `<tr><td class="product"><strong>${esc(f.product_id)}</strong><small>${esc(names[f.platform] || f.platform)}</small></td><td>${f.job_id ? `<button class="link" data-kind="analysis" data-id="${f.job_id}">#${f.job_id} →</button>` : "—"}</td><td>${esc(failureKinds[f.failure_kind] || f.failure_kind)}</td><td>${f.job_id ? `${f.attempt_count}/${f.max_attempts}` : "—"}</td><td>${date(f.completed_at)}</td></tr>`,
+                )
+                .join("") +
+              `</tbody></table></div>` +
+              (failed > failures.length
+                ? `<div class="sub">최근 ${num(failures.length)}건만 표시합니다.</div>`
+                : "") +
+              `<div class="sub">재시도는 새 작업 ID로 예약하며 기존 결과는 새 결과 저장 전까지 유지합니다.</div>`
+            : "") +
+          `<div class="section-title">평상시 운영</div>` +
+          `<div class="summary-stats">` +
+          `<div><span>정기 수집</span><strong>최근 15분 ${num(d.rates_15m.collected_products)}상품</strong><small>대기 ${num(q.collection.waiting)} · 처리 ${num(q.collection.running)}</small></div>` +
+          `<div><span>분석 대기열</span><strong>대기 ${num(q.analysis.waiting)} · 처리 ${num(q.analysis.running)}</strong><small>가장 오래된 대기 ${date(q.analysis.oldest_waiting_at)}</small></div>` +
+          `<div><span>신규 발굴</span><strong><span class="pill ${discoveryClass}">${discoveryLabel}</span></strong><small>${discoveryReason || "최근 완료 " + date((d.discovery[0] || {}).last_completed_at)}</small></div>` +
+          `</div>`;
+        const retry = $("retry-failed-inline");
+        if (retry) {
+          retry.disabled = $("retry-refresh").disabled;
+          retry.onclick = () => refreshAction("retry-failed");
+        }
       }
       function renderOverview(d) {
         overviewData = d;
@@ -908,6 +1079,7 @@
               .join("")
           : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "재분석 실행 대기 · 새 모델/정책 버전 확인 후 활성화합니다."}</div>`;
 
+        renderBackfillSummary(d);
         const t = d.totals,
           r = d.resources,
           q = d.queues,
@@ -1025,8 +1197,11 @@
               `<div class="platform-stat"><strong>${key === "collection" ? "리뷰 수집" : "AI 분석"}</strong><span>대기 ${num(x.waiting)} · 처리 ${num(x.running)} · 만료 ${num(x.expired_leases)}</span></div><div class="sub">가장 오래된 대기 ${date(x.oldest_waiting_at)} · 재시도 소진 ${num(x.exhausted_leases)}</div>`,
           )
           .join("");
+        const [discoveryClass, discoveryLabel, discoveryReason] =
+          discoveryState(d);
         $("discovery").innerHTML =
-          `<div class="stat-row"><span>신규 발굴</span><span class="pill ${d.settings.discovery_enabled ? "alive" : "offline"}">${d.settings.discovery_enabled ? "활성" : "비활성"}</span></div>` +
+          `<div class="stat-row"><span>신규 발굴</span><span class="pill ${discoveryClass}">${discoveryLabel}</span></div>` +
+          (discoveryReason ? `<div class="sub">${discoveryReason}</div>` : "") +
           d.discovery
             .map(
               (x) =>
@@ -1317,20 +1492,53 @@
         loadList().catch(showError);
       };
       $("refresh").onclick = refresh;
+      const springLogin = document.body.dataset.springLogin === "1";
+      let accountLogin = springLogin;
+      function showLoginMode() {
+        $("login-account").classList.toggle("hidden", !accountLogin);
+        $("login-token").classList.toggle("hidden", accountLogin);
+        $("email").required = $("password").required = accountLogin;
+        $("token").required = !accountLogin;
+        $("login-note").textContent = accountLogin
+          ? "관리자 권한 계정만 접근할 수 있습니다."
+          : "AI 서버 토큰과는 별개입니다.";
+        $("login-mode").classList.toggle("hidden", !springLogin);
+        $("login-mode").textContent = accountLogin
+          ? "내부 토큰으로 로그인 →"
+          : "관리자 계정으로 로그인 →";
+        $("login-error").textContent = "";
+      }
+      $("login-mode").onclick = () => {
+        accountLogin = !accountLogin;
+        showLoginMode();
+      };
+      showLoginMode();
       $("login-form").onsubmit = async (e) => {
         e.preventDefault();
         $("login-error").textContent = "";
+        const body = accountLogin
+          ? { email: $("email").value, password: $("password").value }
+          : { token: $("token").value };
         try {
-          await api("/login", {
+          const r = await fetch("/status/login", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: $("token").value }),
+            body: JSON.stringify(body),
           });
-          $("token").value = "";
+          if (!r.ok) {
+            const failure = await r.json().catch(() => null);
+            throw Error(
+              typeof failure?.error?.message === "string"
+                ? failure.error.message
+                : "로그인하지 못했습니다.",
+            );
+          }
+          $("token").value = $("password").value = "";
           $("login-modal").classList.add("hidden");
           await refresh();
         } catch (e) {
-          $("token").value = "";
+          $("token").value = $("password").value = "";
           $("login-error").textContent = e.message;
         }
       };
