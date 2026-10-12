@@ -18,7 +18,11 @@ from sqlalchemy import func, select, text
 from review_data.api.v1 import SessionDep
 from review_data.core.db.analysis_control import control_status, effective_analysis_settings
 from review_data.core.db.models import AnalysisRefreshControl
-from review_data.core.service.analysis_refresh import AnalysisRefreshService, campaign_status
+from review_data.core.service.analysis_refresh import (
+    AnalysisRefreshService,
+    campaign_status,
+    collection_paused,
+)
 from review_data.core.service.operations import collection_metrics, operational_status
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import get_settings
@@ -329,6 +333,9 @@ async def overview(request: Request, session: SessionDep):
             "ai_enabled": settings.ai_analysis_enabled,
             "discovery_enabled": settings.discovery_enabled,
             "discovery_interval_seconds": settings.discovery_interval_seconds,
+            "discovery_max_analysis_pending": settings.discovery_max_analysis_pending,
+            "schedule_max_pending": settings.schedule_max_pending,
+            "collection_paused": await collection_paused(session, settings),
         }
         request.app.state.status_cache = time.monotonic(), result
         return result
