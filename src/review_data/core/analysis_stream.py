@@ -15,9 +15,12 @@ _RESULT_FIELDS = {"review_id", "level", "reasons", *_SCORES}
 
 
 class AnalysisStreamError(Exception):
-    def __init__(self, message: str, retryable: bool = False):
+    """kind는 운영 화면에 남길 실패 원인 구분이다. 메시지는 저장하지 않는다."""
+
+    def __init__(self, message: str, retryable: bool = False, kind: str = "validation"):
         super().__init__(message)
         self.retryable = retryable
+        self.kind = kind
 
 
 @dataclass
@@ -114,7 +117,7 @@ async def _frames(response: httpx.Response) -> AsyncIterator[bytes]:
                 lines.clear()
                 size = 0
     if line or lines:
-        raise AnalysisStreamError("incomplete SSE frame at EOF", retryable=True)
+        raise AnalysisStreamError("incomplete SSE frame at EOF", retryable=True, kind="transport")
 
 
 def _json_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -276,7 +279,9 @@ class AnalysisStreamClient:
                 ) as response:
                     if response.status_code == 409:
                         raise AnalysisStreamError(
-                            "analysis HTTP status 409", retryable=await _in_progress(response)
+                            "analysis HTTP status 409",
+                            retryable=await _in_progress(response),
+                            kind="conflict",
                         )
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]
@@ -288,11 +293,16 @@ class AnalysisStreamClient:
             raise AnalysisStreamError(
                 f"analysis HTTP status {status}",
                 retryable=status == 429 or status >= 500,
+                kind="http",
             ) from exc
         except (httpx.InvalidURL, httpx.UnsupportedProtocol) as exc:
             raise AnalysisStreamError("invalid analysis URL") from exc
         except httpx.HTTPError as exc:
-            raise AnalysisStreamError("analysis transport failed", retryable=True) from exc
+            raise AnalysisStreamError(
+                "analysis transport failed",
+                retryable=True,
+                kind="timeout" if isinstance(exc, httpx.TimeoutException) else "transport",
+            ) from exc
 
     async def _consume(
         self,
@@ -359,11 +369,13 @@ class AnalysisStreamClient:
                 retryable = data.get("retryable", False)
                 if type(retryable) is not bool:
                     raise AnalysisStreamError("error retryable must be boolean")
-                raise AnalysisStreamError("analysis server sent error", retryable=retryable)
+                raise AnalysisStreamError(
+                    "analysis server sent error", retryable=retryable, kind="ai_error"
+                )
             else:
                 raise AnalysisStreamError("unknown or repeated SSE event")
         if not done:
-            raise AnalysisStreamError("SSE ended without done", retryable=True)
+            raise AnalysisStreamError("SSE ended without done", retryable=True, kind="transport")
         return AnalysisStreamResult(
             [results[item["review_id"]] for item in payload],
             model_version,

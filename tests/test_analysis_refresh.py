@@ -2,7 +2,7 @@
 
 import asyncio
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from review_data.core.analysis_stream import AnalysisStreamError, AnalysisStreamResult
 from review_data.core.db.analysis_repository import AnalysisRepository
@@ -193,6 +193,22 @@ async def test_failure_retains_old_results_retry_has_new_id_and_success_switches
     async with session_factory() as s:
         report = (await campaign_status(s))[0]
         assert report["status"] == "completed_with_errors" and report["failed"] == 1
+        # 실패 목록은 원인 구분만 내보내고 저장된 오류 문구는 내보내지 않는다.
+        assert report["failures"] == [
+            {
+                "platform": "kurly",
+                "product_id": "0",
+                "job_id": failed.ids[0],
+                "attempt_count": 1,
+                "max_attempts": 3,
+                "completed_at": report["failures"][0]["completed_at"],
+                "failure_kind": "validation",
+            }
+        ]
+        await s.execute(update(AnalysisJob).values(last_error="분석 요청 또는 응답 검증 실패"))
+        legacy = (await campaign_status(s))[0]["failures"][0]
+        assert legacy["failure_kind"] == "legacy_unknown"
+        await s.rollback()
         assert (await AnalysisRepository(s).status("kurly", "0", settings))["results"][0][
             "rti"
         ] == 50

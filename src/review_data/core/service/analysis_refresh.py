@@ -9,7 +9,7 @@ from sqlalchemy import exists, func, select, text, update
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION
 from review_data.core.db.analysis_control import effective_analysis_settings
-from review_data.core.db.analysis_repository import AnalysisRepository
+from review_data.core.db.analysis_repository import FAILURE_KINDS, AnalysisRepository
 from review_data.core.db.models import AnalysisCampaign, AnalysisCampaignItem, AnalysisJob
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import Settings
@@ -333,6 +333,26 @@ async def campaign_status(session, *, enabled=True):
     now = datetime.now(UTC)
     for row in rows:
         row.update(estimate_completion(row, now, enabled=enabled))
+    if rows and rows[0]["failed"]:
+        # 원본 오류 문구 대신 원인 구분만 내보낸다. 구분 기록 이전의 실패는 legacy_unknown이다.
+        failures = await session.execute(
+            text("""
+        SELECT i.platform,i.product_id,j.id AS job_id,j.last_error,j.attempt_count,
+               j.max_attempts,j.completed_at
+        FROM analysis_campaign_items i LEFT JOIN analysis_jobs j ON j.id=i.analysis_job_id
+        WHERE i.campaign_id=:campaign AND (i.status='failed'
+              OR (i.status='active' AND j.status='failed'))
+        ORDER BY j.completed_at DESC NULLS LAST,j.id DESC LIMIT 50
+    """),
+            {"campaign": rows[0]["id"]},
+        )
+        rows[0]["failures"] = [
+            {
+                **{key: value for key, value in row.items() if key != "last_error"},
+                "failure_kind": FAILURE_KINDS.get(row["last_error"], "legacy_unknown"),
+            }
+            for row in failures.mappings()
+        ]
     return rows
 
 

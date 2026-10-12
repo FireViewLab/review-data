@@ -102,10 +102,21 @@ async def run_once(
             await session.commit()
     except (AnalysisStreamError, TimeoutError, SQLAlchemyError) as exc:
         retryable = not isinstance(exc, AnalysisStreamError) or exc.retryable
+        if isinstance(exc, AnalysisStreamError):
+            kind = exc.kind
+        else:
+            kind = "timeout" if isinstance(exc, TimeoutError) else "storage"
+        # AI가 앞선 요청을 아직 처리 중이면 곧바로 다시 보내도 409만 반복되어 시도 횟수를
+        # 소진한다. 앞선 요청이 끝날 시간을 두고 같은 작업 ID로 다시 보낸다.
+        min_delay = settings.ai_timeout_seconds * 2 if kind == "conflict" else 0
         async with factory() as session:
-            await AnalysisRepository(session).fail(claim["id"], worker_id, retryable)
+            await AnalysisRepository(session).fail(
+                claim["id"], worker_id, retryable, kind, min_delay
+            )
             await session.commit()
-        logger.warning("분석 작업 %s 처리 실패 (재시도=%s)", claim["id"], retryable)
+        logger.warning(
+            "분석 작업 %s 처리 실패 (원인=%s, 재시도=%s)", claim["id"], kind, retryable
+        )
     except Exception:  # noqa: BLE001
         async with factory() as session:
             await AnalysisRepository(session).fail(claim["id"], worker_id, False)
