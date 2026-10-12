@@ -183,18 +183,17 @@ class AnalysisRepository:
             )
             .values(status="failed", last_error=FAILURE_REASONS["exhausted"], completed_at=now)
         )
-        campaign_filter = True
-        if backfill_only:
-            campaign_filter = (
-                select(AnalysisCampaignItem.analysis_job_id)
-                .join(AnalysisCampaign, AnalysisCampaign.id == AnalysisCampaignItem.campaign_id)
-                .where(
-                    AnalysisCampaign.status == "running",
-                    AnalysisCampaignItem.status == "active",
-                    AnalysisCampaignItem.analysis_job_id == AnalysisJob.id,
-                )
-                .exists()
+        in_campaign = (
+            select(AnalysisCampaignItem.analysis_job_id)
+            .join(AnalysisCampaign, AnalysisCampaign.id == AnalysisCampaignItem.campaign_id)
+            .where(
+                AnalysisCampaign.status == "running",
+                AnalysisCampaignItem.status == "active",
+                AnalysisCampaignItem.analysis_job_id == AnalysisJob.id,
             )
+            .exists()
+        )
+        campaign_filter = in_campaign if backfill_only else True
         job = await self.session.scalar(
             select(AnalysisJob)
             .where(
@@ -204,7 +203,8 @@ class AnalysisRepository:
                 AnalysisJob.available_at <= now,
                 (AnalysisJob.lease_expires_at.is_(None)) | (AnalysisJob.lease_expires_at <= now),
             )
-            .order_by(AnalysisJob.id)
+            # 캠페인이 진행 중인 동안 수집이 멈추므로 캠페인 작업을 먼저 끝낸다.
+            .order_by(in_campaign.desc(), AnalysisJob.id)
             .with_for_update(skip_locked=True)
             .limit(1)
         )

@@ -430,6 +430,37 @@ async def test_two_workers_claim_distinct_jobs_concurrently(session_factory):
         )
 
 
+async def test_retry_is_reserved_and_processed_ahead_of_full_normal_queue(session_factory):
+    await seed(session_factory, count=1)
+    settings = config()
+    await tick(session_factory, settings)
+    await run_once(session_factory, "w", settings=settings, client=Client(fail=True))
+    await tick(session_factory, settings)
+    async with session_factory() as s:
+        assert (await campaign_status(s))[0]["status"] == "completed_with_errors"
+        # 캠페인과 무관한 일반 분석 작업이 예약 기준(2건)보다 많이 쌓여 있다.
+        for i in range(3):
+            s.add(ProductRow(platform="kurly", product_id=f"n{i}", name="상품", url="https://x"))
+        await s.flush()
+        for i in range(3):
+            s.add(ReviewRow(platform="kurly", product_id=f"n{i}", review_id="r", content="리뷰"))
+        await s.flush()
+        normal = [await AnalysisRepository(s).enqueue("kurly", f"n{i}", settings) for i in range(3)]
+        await s.commit()
+
+    assert (await tick(session_factory, settings, retry_failed=True))["reserved"] == 1
+    client = Client()
+    assert await run_once(session_factory, "w", settings=settings, client=client)
+    assert client.ids[0] > max(normal)
+    await tick(session_factory, settings)
+    async with session_factory() as s:
+        # 재시도분이 끝나면 캠페인이 닫혀 수집이 재개되고, 일반 작업은 그 뒤에 처리된다.
+        assert (await campaign_status(s))[0]["status"] == "completed"
+        assert not await collection_paused(s, settings)
+    assert await run_once(session_factory, "w", settings=settings, client=client)
+    assert client.ids[1] == min(normal)
+
+
 async def test_backfill_extra_worker_leaves_normal_jobs_untouched(session_factory):
     await seed(session_factory, count=2, version="v2", done=False)
     client = Client()
