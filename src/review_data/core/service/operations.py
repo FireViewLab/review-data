@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 
-async def operational_status(session):
-    result = {"checked_at": datetime.now(UTC).isoformat(), "queues": {}}
+async def queue_status(session):
+    """수집·분석 대기열 요약. 상태 색인만 훑어 빠르다."""
+    queues = {}
     for name, table, pending in [
         ("collection", "collection_jobs", "pending"),
         ("analysis", "analysis_jobs", "queued"),
@@ -30,7 +31,26 @@ async def operational_status(session):
             .mappings()
             .one()
         )
-        result["queues"][name] = dict(row)
+        queues[name] = dict(row)
+    return queues
+
+
+async def discovery_status(session):
+    return [
+        dict(row)
+        for row in (
+            await session.execute(
+                text("""
+        SELECT key,position,next_run_at,lease_expires_at,last_completed_at,
+               last_saved,last_queued,last_failures FROM discovery_state ORDER BY key
+    """)
+            )
+        ).mappings()
+    ]
+
+
+async def operational_status(session):
+    result = {"checked_at": datetime.now(UTC).isoformat(), "queues": await queue_status(session)}
     result["latest_analysis"] = [
         dict(row)
         for row in (
@@ -103,17 +123,7 @@ async def operational_status(session):
             )
         ).mappings()
     ]
-    result["discovery"] = [
-        dict(row)
-        for row in (
-            await session.execute(
-                text("""
-        SELECT key,position,next_run_at,lease_expires_at,last_completed_at,
-               last_saved,last_queued,last_failures FROM discovery_state ORDER BY key
-    """)
-            )
-        ).mappings()
-    ]
+    result["discovery"] = await discovery_status(session)
     return result
 
 
