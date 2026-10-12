@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import get_settings
 
 router = APIRouter(prefix="/status", include_in_schema=False)
+logger = logging.getLogger(__name__)
 COOKIE = "review_status_session"
 SESSION_SECONDS = 8 * 3600
 
@@ -228,117 +230,151 @@ async def rows(session, sql, params=None):
     return [dict(row) for row in (await session.execute(text(sql), params or {})).mappings()]
 
 
+OVERVIEW_TTL_SECONDS = 10
+
+
+async def build_overview(app, session) -> dict:
+    settings = await effective_analysis_settings(session, get_settings())
+    result = await operational_status(session)
+    metrics = await collection_metrics(session)
+    result["platforms"] = [
+        {key: row[key] for key in ("platform", "products", "reviews")} for row in metrics
+    ]
+    result["resources"] = app.state.resource_metrics
+    result["totals"] = (
+        await rows(
+            session,
+            """
+        SELECT (SELECT count(*) FROM products) AS products,
+               (SELECT count(*) FROM review_analyses a JOIN (
+                   SELECT DISTINCT ON (platform,product_id) id FROM analysis_jobs
+                   WHERE model_version=:model AND policy_version=:policy
+                     AND (status='done' OR (status='stale' AND completed_at IS NOT NULL
+                          AND result IS NOT NULL))
+                   ORDER BY platform,product_id,completed_at DESC NULLS LAST,id DESC
+                ) latest ON latest.id=a.analysis_job_id) AS analysis_results,
+               (SELECT count(*) FROM products p WHERE NOT EXISTS
+                  (SELECT 1 FROM reviews r WHERE r.platform=p.platform
+                   AND r.product_id=p.product_id)) AS empty_products
+    """,
+            {"model": settings.ai_model_version, "policy": settings.ai_policy_version},
+        )
+    )[0]
+    result["totals"]["reviews"] = sum(row["reviews"] for row in metrics)
+    result["rates_15m"] = (
+        await rows(
+            session,
+            """
+        SELECT
+            (SELECT count(*) FROM collection_jobs WHERE completed_at>=now()-interval '15 min'
+              AND review_status='succeeded') AS collected_products,
+            (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
+              WHERE locked_at>=now()-interval '15 min' AND attempt_count>0)
+              AS ai_claimed_reviews,
+            (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
+              WHERE completed_at>=now()-interval '15 min' AND status='done')
+              AS ai_completed_reviews
+    """,
+        )
+    )[0]
+    result["rates_15m"]["new_reviews"] = sum(row["new_reviews"] for row in metrics)
+    result["rates_15m"]["refreshed_reviews"] = sum(row["refreshed_reviews"] for row in metrics)
+    result["workers"] = await rows(
+        session,
+        """
+        SELECT w.worker_id,w.role,w.last_seen_at,w.stopped_at,
+            (w.stopped_at IS NULL AND w.last_seen_at>now()-interval '35 seconds') AS alive,
+            (SELECT json_agg(json_build_object('id',j.id,'platform',j.platform,
+                     'product_id',j.product_id,'lease_expires_at',j.lease_expires_at))
+             FROM collection_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
+              AS collection_jobs,
+            (SELECT json_agg(json_build_object('id',j.id,'platform',j.platform,
+                     'product_id',j.product_id,'input_review_count',j.input_review_count,
+                     'lease_expires_at',j.lease_expires_at))
+             FROM analysis_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
+              AS analysis_jobs
+        FROM worker_heartbeats w WHERE w.stopped_at IS NULL
+            AND w.last_seen_at>now()-interval '5 minutes'
+        ORDER BY w.role,w.last_seen_at DESC
+    """,
+    )
+    result["timeline"] = await rows(
+        session,
+        """
+        WITH buckets AS (
+          SELECT generate_series(date_bin(interval '5 min',now()-interval '55 min',
+                     timestamp '2000-01-01'),date_bin(interval '5 min',now(),
+                     timestamp '2000-01-01'),interval '5 min') AS bucket
+        ), collected AS (
+          SELECT date_bin(interval '5 min',first_collected_at,timestamp '2000-01-01') AS bucket,
+                 count(*) AS count FROM reviews
+          WHERE first_collected_at>=now()-interval '1 hour'
+          GROUP BY 1
+        ), analyzed AS (
+          SELECT date_bin(interval '5 min',completed_at,timestamp '2000-01-01') AS bucket,
+            sum(input_review_count) AS count FROM analysis_jobs WHERE status='done'
+            AND completed_at>=now()-interval '1 hour' GROUP BY 1
+        ) SELECT b.bucket,coalesce(c.count,0) AS collected,coalesce(a.count,0) AS analyzed
+          FROM buckets b LEFT JOIN collected c USING(bucket)
+          LEFT JOIN analyzed a USING(bucket) ORDER BY b.bucket
+    """,
+    )
+    result["analysis_control"] = await control_status(session, settings)
+    result["analysis_campaigns"] = await campaign_status(
+        session, enabled=settings.analysis_refresh_enabled
+    )
+    result["settings"] = {
+        "analysis_refresh_enabled": settings.analysis_refresh_enabled,
+        "target_model_version": settings.ai_model_version,
+        "target_policy_version": settings.ai_policy_version,
+        "ai_enabled": settings.ai_analysis_enabled,
+        "discovery_enabled": settings.discovery_enabled,
+        "discovery_interval_seconds": settings.discovery_interval_seconds,
+        "discovery_max_analysis_pending": settings.discovery_max_analysis_pending,
+        "schedule_max_pending": settings.schedule_max_pending,
+        "collection_paused": await collection_paused(session, settings),
+    }
+    return result
+
+
+async def _refresh_overview(app, replaced) -> None:
+    """화면 응답과 분리해 집계를 갱신한다. 그사이 제어 요청이 캐시를 비웠으면 덮어쓰지 않는다."""
+    started = time.monotonic()
+    try:
+        async with app.state.session_factory() as session:
+            result = await build_overview(app, session)
+    except Exception:  # noqa: BLE001 - 다음 요청에서 다시 시도한다
+        logger.warning("운영 개요 갱신 실패: 직전 집계를 유지한다.")
+        return
+    if app.state.status_cache is replaced:
+        now = time.monotonic()
+        app.state.status_cache = now, result, now - started
+
+
 @router.get("/api/overview")
 async def overview(request: Request, session: SessionDep):
-    # 브라우저 수와 무관하게 10초에 한 번 집계한다.
-    if not hasattr(request.app.state, "status_cache_lock"):
-        request.app.state.status_cache_lock = asyncio.Lock()
-    async with request.app.state.status_cache_lock:
-        cached = getattr(request.app.state, "status_cache", None)
-        if cached and time.monotonic() - cached[0] < 10:
-            return cached[1]
-        settings = await effective_analysis_settings(session, get_settings())
-        result = await operational_status(session)
-        metrics = await collection_metrics(session)
-        result["platforms"] = [
-            {key: row[key] for key in ("platform", "products", "reviews")} for row in metrics
-        ]
-        result["resources"] = request.app.state.resource_metrics
-        result["totals"] = (
-            await rows(
-                session,
-                """
-            SELECT (SELECT count(*) FROM products) AS products,
-                   (SELECT count(*) FROM review_analyses a JOIN (
-                       SELECT DISTINCT ON (platform,product_id) id FROM analysis_jobs
-                       WHERE model_version=:model AND policy_version=:policy
-                         AND (status='done' OR (status='stale' AND completed_at IS NOT NULL
-                              AND result IS NOT NULL))
-                       ORDER BY platform,product_id,completed_at DESC NULLS LAST,id DESC
-                    ) latest ON latest.id=a.analysis_job_id) AS analysis_results,
-                   (SELECT count(*) FROM products p WHERE NOT EXISTS
-                      (SELECT 1 FROM reviews r WHERE r.platform=p.platform
-                       AND r.product_id=p.product_id)) AS empty_products
-        """,
-                {"model": settings.ai_model_version, "policy": settings.ai_policy_version},
-            )
-        )[0]
-        result["totals"]["reviews"] = sum(row["reviews"] for row in metrics)
-        result["rates_15m"] = (
-            await rows(
-                session,
-                """
-            SELECT
-                (SELECT count(*) FROM collection_jobs WHERE completed_at>=now()-interval '15 min'
-                  AND review_status='succeeded') AS collected_products,
-                (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
-                  WHERE locked_at>=now()-interval '15 min' AND attempt_count>0)
-                  AS ai_claimed_reviews,
-                (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
-                  WHERE completed_at>=now()-interval '15 min' AND status='done')
-                  AS ai_completed_reviews
-        """,
-            )
-        )[0]
-        result["rates_15m"]["new_reviews"] = sum(row["new_reviews"] for row in metrics)
-        result["rates_15m"]["refreshed_reviews"] = sum(row["refreshed_reviews"] for row in metrics)
-        result["workers"] = await rows(
-            session,
-            """
-            SELECT w.worker_id,w.role,w.last_seen_at,w.stopped_at,
-                (w.stopped_at IS NULL AND w.last_seen_at>now()-interval '35 seconds') AS alive,
-                (SELECT json_agg(json_build_object('id',j.id,'platform',j.platform,
-                         'product_id',j.product_id,'lease_expires_at',j.lease_expires_at))
-                 FROM collection_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
-                  AS collection_jobs,
-                (SELECT json_agg(json_build_object('id',j.id,'platform',j.platform,
-                         'product_id',j.product_id,'input_review_count',j.input_review_count,
-                         'lease_expires_at',j.lease_expires_at))
-                 FROM analysis_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
-                  AS analysis_jobs
-            FROM worker_heartbeats w WHERE w.stopped_at IS NULL
-                AND w.last_seen_at>now()-interval '5 minutes'
-            ORDER BY w.role,w.last_seen_at DESC
-        """,
-        )
-        result["timeline"] = await rows(
-            session,
-            """
-            WITH buckets AS (
-              SELECT generate_series(date_bin(interval '5 min',now()-interval '55 min',
-                         timestamp '2000-01-01'),date_bin(interval '5 min',now(),
-                         timestamp '2000-01-01'),interval '5 min') AS bucket
-            ), collected AS (
-              SELECT date_bin(interval '5 min',first_collected_at,timestamp '2000-01-01') AS bucket,
-                     count(*) AS count FROM reviews
-              WHERE first_collected_at>=now()-interval '1 hour'
-              GROUP BY 1
-            ), analyzed AS (
-              SELECT date_bin(interval '5 min',completed_at,timestamp '2000-01-01') AS bucket,
-                sum(input_review_count) AS count FROM analysis_jobs WHERE status='done'
-                AND completed_at>=now()-interval '1 hour' GROUP BY 1
-            ) SELECT b.bucket,coalesce(c.count,0) AS collected,coalesce(a.count,0) AS analyzed
-              FROM buckets b LEFT JOIN collected c USING(bucket)
-              LEFT JOIN analyzed a USING(bucket) ORDER BY b.bucket
-        """,
-        )
-        result["analysis_control"] = await control_status(session, settings)
-        result["analysis_campaigns"] = await campaign_status(
-            session, enabled=settings.analysis_refresh_enabled
-        )
-        result["settings"] = {
-            "analysis_refresh_enabled": settings.analysis_refresh_enabled,
-            "target_model_version": settings.ai_model_version,
-            "target_policy_version": settings.ai_policy_version,
-            "ai_enabled": settings.ai_analysis_enabled,
-            "discovery_enabled": settings.discovery_enabled,
-            "discovery_interval_seconds": settings.discovery_interval_seconds,
-            "discovery_max_analysis_pending": settings.discovery_max_analysis_pending,
-            "schedule_max_pending": settings.schedule_max_pending,
-            "collection_paused": await collection_paused(session, settings),
-        }
-        request.app.state.status_cache = time.monotonic(), result
-        return result
+    # 집계는 수 초가 걸린다. 직전 결과를 바로 응답하고 갱신은 백그라운드에서 한 번만 돈다.
+    app = request.app
+    if not hasattr(app.state, "status_cache_lock"):
+        app.state.status_cache_lock = asyncio.Lock()
+    cached = getattr(app.state, "status_cache", None)
+    if cached is None:
+        async with app.state.status_cache_lock:
+            cached = getattr(app.state, "status_cache", None)
+            if cached is None:
+                started = time.monotonic()
+                result = await build_overview(app, session)
+                now = time.monotonic()
+                cached = app.state.status_cache = now, result, now - started
+        return {**cached[1], "refreshing": False}
+    task = getattr(app.state, "status_refresh_task", None)
+    refreshing = task is not None and not task.done()
+    # 집계가 느린 동안에는 갱신 간격도 늘려 DB를 계속 붙잡지 않는다.
+    stale_after = max(OVERVIEW_TTL_SECONDS, 2 * cached[2])
+    if not refreshing and time.monotonic() - cached[0] >= stale_after:
+        app.state.status_refresh_task = asyncio.create_task(_refresh_overview(app, cached))
+        refreshing = True
+    return {**cached[1], "refreshing": refreshing}
 
 
 @router.get("/api/jobs/{kind}")
