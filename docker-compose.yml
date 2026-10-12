@@ -87,10 +87,11 @@ services:
     stop_signal: SIGINT
     mem_limit: 256m
 
-  # Backfill 캠페인의 작업만 추가 처리한다. 일반 분석은 기존 워커 한 개가 맡는다.
-  analysis-backfill-worker:
+  # 분석 워커는 항상 두 개다. 워커 한 개가 AI 요청 하나를 맡으므로 동시 분석 요청은 최대 2건이다.
+  # 한 개로는 정기 수집이 만드는 분석 작업을 따라가지 못해 대기열이 쌓이고 신규 발굴이 멈춘다.
+  analysis-worker-2:
     <<: *app
-    command: ["crawler", "analysis-worker", "--backfill-only"]
+    command: ["crawler", "analysis-worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
