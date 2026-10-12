@@ -336,15 +336,17 @@
       .error {
         color: var(--red);
       }
-      #refresh-panel > summary {
-        cursor: pointer;
+      .campaign-done {
+        border-left: 3px solid var(--green);
       }
-      #refresh-panel > summary h2 {
-        display: inline-block;
-        margin: 0;
+      .campaign-done.has-failures {
+        border-left-color: var(--orange);
       }
-      #refresh-panel[open] > summary {
-        margin-bottom: 10px;
+      .campaign-done .bar i {
+        background: var(--green);
+      }
+      .campaign-old {
+        opacity: 0.65;
       }
       .summary-stats {
         display: grid;
@@ -633,18 +635,8 @@
       </header>
       <div id="error-banner" class="notice hidden" role="alert"></div>
       <section id="overview-view">
-        <div
-          id="backfill-summary"
-          class="panel hidden"
-          style="margin-bottom: 20px"
-        ></div>
-        <details
-          id="refresh-panel"
-          class="panel"
-          style="margin-bottom: 20px"
-          open
-        >
-          <summary><h2>모델 버전별 재분석</h2></summary>
+        <div class="panel" style="margin-bottom: 20px">
+          <h2>모델 버전별 재분석</h2>
           <p class="sub">
             AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
             맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
@@ -682,7 +674,7 @@
             aria-live="polite"
           ></div>
           <div id="campaigns"></div>
-        </details>
+        </div>
         <div class="cards" id="totals"></div>
         <div class="section-title">서버 자원</div>
         <div class="cards" id="resources"></div>
@@ -878,6 +870,7 @@
         detailHistory = [],
         detailNext = null,
         overviewData = null,
+        followUp = null,
         listGeneration = 0,
         detailGeneration = 0;
       async function api(path, options = {}) {
@@ -977,42 +970,34 @@
           ];
         return ["alive", "활성", ""];
       }
-      let refreshPanelMode = null;
-      function renderBackfillSummary(d) {
-        const c = (d.analysis_campaigns || [])[0];
-        const finished = c && c.status !== "running" && c.completed_at;
-        const mode = finished ? "finished" : "active";
-        if (mode !== refreshPanelMode) {
-          // 종료 후에는 제어 영역을 접어 두고, 사용자가 연 상태는 새로고침에서 유지한다.
-          $("refresh-panel").open = !finished;
-          refreshPanelMode = mode;
-        }
-        if (!finished) {
-          $("backfill-summary").classList.add("hidden");
-          return;
-        }
+      function campaignCard(c, d, latest) {
+        const processed = Number(c.done) + Number(c.failed) + Number(c.skipped);
+        const percent = c.total ? (100 * processed) / c.total : 100;
+        const head = (label, cls) =>
+          `<div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill ${cls}">${esc(label)}</span><strong>${percent.toFixed(2)}%</strong></div><div class="bar"><i style="width:${percent}%;min-width:${processed ? 2 : 0}px"></i></div>`;
+        if (c.status === "running")
+          return `<div class="review" style="padding:16px">${head(d.settings.analysis_refresh_enabled ? "재분석 중" : "예약 중지 · 재개 대기", "running")}<div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">${completionEstimate(c)}</div><div class="sub">시작 ${date(c.created_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
+        if (c.status === "superseded")
+          return `<div class="review campaign-old" style="padding:16px">${head("다음 버전으로 전환", "")}<div class="stat-row"><span>대상 ${num(c.total)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">시작 ${date(c.created_at)} · 전환 ${date(c.completed_at)}</div></div>`;
         const failed = Number(c.failed),
           target = Number(c.total) - Number(c.skipped),
           applied = target ? (100 * Number(c.done)) / target : 100,
-          q = d.queues,
-          [discoveryClass, discoveryLabel, discoveryReason] = discoveryState(d),
           failures = c.failures || [];
-        $("backfill-summary").classList.remove("hidden");
-        $("backfill-summary").innerHTML =
-          `<h2>Backfill 종료 <span class="pill ${failed ? "partial" : "alive"}">${failed ? `완료 · 실패 ${num(failed)}건` : "완료"}</span></h2>` +
-          `<div class="sub">#${c.id} ${esc(c.model_version)} · 정책 ${esc(c.policy_version)}</div>` +
+        return (
+          `<div class="review campaign-done ${failed ? "has-failures" : ""}" style="padding:16px">` +
+          head(failed ? `완료 · 실패 ${num(failed)}건` : "완료", failed ? "partial" : "done") +
           `<div class="summary-stats">` +
           [
             ["종료 시각", date(c.completed_at)],
             ["소요 시간", duration(c.created_at, c.completed_at)],
             ["완료 / 대상", `${num(c.done)} / ${num(target)}`],
             ["목표 버전 적용률", applied.toFixed(2) + "%"],
-            ["실패", num(failed)],
+            ["실패 · 제외", `${num(failed)} · ${num(c.skipped)}`],
           ]
             .map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`)
             .join("") +
           `</div>` +
-          (failed
+          (failed && latest
             ? `<div class="section-title">실패 건 <button class="btn" id="retry-failed-inline">실패 건 재시도</button></div>` +
               `<div class="table-wrap"><table><thead><tr><th>상품</th><th>작업</th><th>실패 원인</th><th>시도</th><th>실패 시각</th></tr></thead><tbody>` +
               failures
@@ -1027,17 +1012,8 @@
                 : "") +
               `<div class="sub">재시도는 새 작업 ID로 예약하며 기존 결과는 새 결과 저장 전까지 유지합니다.</div>`
             : "") +
-          `<div class="section-title">평상시 운영</div>` +
-          `<div class="summary-stats">` +
-          `<div><span>정기 수집</span><strong>최근 15분 ${num(d.rates_15m.collected_products)}상품</strong><small>대기 ${num(q.collection.waiting)} · 처리 ${num(q.collection.running)}</small></div>` +
-          `<div><span>분석 대기열</span><strong>대기 ${num(q.analysis.waiting)} · 처리 ${num(q.analysis.running)}</strong><small>가장 오래된 대기 ${date(q.analysis.oldest_waiting_at)}</small></div>` +
-          `<div><span>신규 발굴</span><strong><span class="pill ${discoveryClass}">${discoveryLabel}</span></strong><small>${discoveryReason || "최근 완료 " + date((d.discovery[0] || {}).last_completed_at)}</small></div>` +
-          `</div>`;
-        const retry = $("retry-failed-inline");
-        if (retry) {
-          retry.disabled = $("retry-refresh").disabled;
-          retry.onclick = () => refreshAction("retry-failed");
-        }
+          `</div>`
+        );
       }
       function renderOverview(d) {
         overviewData = d;
@@ -1063,23 +1039,14 @@
         }
         const campaigns = d.analysis_campaigns || [];
         $("campaigns").innerHTML = campaigns.length
-          ? campaigns
-              .map((c) => {
-                const finished =
-                  Number(c.done) + Number(c.failed) + Number(c.skipped);
-                const percent = c.total ? (100 * finished) / c.total : 100;
-                const campaignStates = {
-                  running: "재분석 중",
-                  completed: "완료",
-                  completed_with_errors: "완료 · 실패 확인 필요",
-                  superseded: "다음 버전으로 전환",
-                };
-                return `<div class="review" style="padding:16px"><div class="detail-meta"><strong>#${c.id} ${esc(c.model_version)}</strong><span>정책 ${esc(c.policy_version)}</span><span class="pill">${esc(c.status === "running" && !d.settings.analysis_refresh_enabled ? "예약 중지 · 재개 대기" : campaignStates[c.status] || c.status)}</span><strong>${percent.toFixed(2)}%</strong></div><div class="bar"><i style="width:${percent}%;min-width:${finished ? 2 : 0}px"></i></div><div class="stat-row"><span>대상 ${num(c.total)} · 예약 전 대기 ${num(c.waiting)} · 큐 대기 ${num(c.queued)} · 처리 ${num(c.running)}</span><span>완료 ${num(c.done)} · 실패 ${num(c.failed)} · 제외 ${num(c.skipped)}</span></div><div class="sub">${completionEstimate(c)}</div><div class="sub">시작 ${date(c.created_at)} · 완료 ${date(c.completed_at)} · 진행률은 완료/실패/제외 처리 합계입니다.</div></div>`;
-              })
-              .join("")
+          ? campaigns.map((c, i) => campaignCard(c, d, i === 0)).join("")
           : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "재분석 실행 대기 · 새 모델/정책 버전 확인 후 활성화합니다."}</div>`;
+        const retryInline = $("retry-failed-inline");
+        if (retryInline) {
+          retryInline.disabled = $("retry-refresh").disabled;
+          retryInline.onclick = () => refreshAction("retry-failed");
+        }
 
-        renderBackfillSummary(d);
         const t = d.totals,
           r = d.resources,
           q = d.queues,
@@ -1331,7 +1298,11 @@
           const d = await api("/api/overview");
           renderOverview(d);
           if (tab !== "overview") await loadList();
-          $("updated").textContent = date(d.checked_at) + " 기준";
+          $("updated").textContent =
+            date(d.checked_at) + " 기준" + (d.refreshing ? " · 갱신 중" : "");
+          // 직전 집계를 먼저 받은 경우 새 집계가 끝나는 대로 다시 읽는다.
+          clearTimeout(followUp);
+          if (d.refreshing) followUp = setTimeout(refresh, 2000);
           $("connection").innerHTML = '<i class="dot"></i>10초 자동 갱신';
           $("error-banner").classList.add("hidden");
         } catch (e) {

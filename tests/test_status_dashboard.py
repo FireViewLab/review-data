@@ -156,6 +156,35 @@ def test_account_login_requires_spring_configuration(engine, dashboard_settings)
         assert client.post("/status/login", json={}).status_code == 503
 
 
+def test_overview_returns_last_snapshot_and_refreshes_in_background(engine, dashboard_settings):
+    import time
+
+    with TestClient(module.app) as client:
+        client.post("/status/login", json={"token": "data-only-secret"})
+        first = client.get("/status/api/overview").json()
+        assert first["refreshing"] is False
+        again = client.get("/status/api/overview").json()
+        assert again["checked_at"] == first["checked_at"] and again["refreshing"] is False
+
+        # 오래된 집계도 기다리지 않고 응답하고, 갱신이 끝나면 새 집계로 바뀐다.
+        stamp, snapshot, _ = module.app.state.status_cache
+        module.app.state.status_cache = stamp - 3600, snapshot, 0.0
+        stale = client.get("/status/api/overview").json()
+        assert stale["checked_at"] == first["checked_at"] and stale["refreshing"] is True
+        for _ in range(100):
+            fresh = client.get("/status/api/overview").json()
+            if fresh["checked_at"] != first["checked_at"]:
+                break
+            time.sleep(0.05)
+        assert fresh["checked_at"] != first["checked_at"] and fresh["refreshing"] is False
+
+        # 갱신 도중 제어 요청이 캐시를 비우면 갱신 결과로 되살리지 않는다.
+        replaced = module.app.state.status_cache
+        module.app.state.status_cache = None
+        client.portal.call(status._refresh_overview, module.app, replaced)
+        assert module.app.state.status_cache is None
+
+
 def test_expired_and_tampered_sessions_fail(engine, dashboard_settings):
     with TestClient(module.app) as client:
         for value in [
