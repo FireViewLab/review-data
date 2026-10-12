@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -56,6 +57,103 @@ def test_login_cookie_is_scoped_and_logout_revokes_browser_session(engine, dashb
         assert client.get("/status/api/jobs/analysis/99999").status_code == 404
         client.post("/status/logout")
         assert client.get("/status/api/overview").status_code == 401
+
+
+@pytest.fixture
+def spring_login(monkeypatch, dashboard_settings):
+    """Spring 로그인 응답을 대신하고 받은 요청을 기록한다."""
+    dashboard_settings.spring_auth_login_url = "https://spring.test/api/auth/login"
+    status._login_failures.clear()
+    calls = []
+    state = {"status": 200, "role": "ADMIN", "error": None}
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        if state["error"]:
+            raise state["error"]
+        body = {"success": True, "data": {"accessToken": "spring-jwt", "role": state["role"]}}
+        return httpx.Response(
+            state["status"], json=body, headers={"Set-Cookie": "review_rt=spring-refresh"}
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        status.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    yield state, calls
+    status._login_failures.clear()
+
+
+ACCOUNT = {"email": "admin@example.com", "password": "pw-1234"}
+
+
+def test_spring_admin_login_issues_data_session_only(engine, spring_login):
+    _, calls = spring_login
+    with TestClient(module.app) as client:
+        assert 'data-spring-login="1"' in client.get("/status").text
+        login = client.post("/status/login", json=ACCOUNT)
+        assert login.status_code == 200, login.text
+        assert calls == [ACCOUNT]
+        cookie = login.headers["set-cookie"]
+        assert cookie.startswith(f"{status.COOKIE}=")
+        assert "HttpOnly" in cookie and "Path=/status" in cookie
+        for secret in ("pw-1234", "spring-jwt", "spring-refresh", "review_rt"):
+            assert secret not in cookie and secret not in login.text
+        assert client.get("/status/api/overview").status_code == 200
+        assert client.get("/api/v1/catalog").status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("spring_status", "role"), [(200, "USER"), (401, None), (400, None), (200, None)]
+)
+def test_spring_login_rejects_non_admin_without_distinguishing(
+    engine, spring_login, spring_status, role
+):
+    state, _ = spring_login
+    state.update(status=spring_status, role=role)
+    with TestClient(module.app) as client:
+        login = client.post("/status/login", json=ACCOUNT)
+        assert login.status_code == 401
+        message = login.json()["error"]["message"]
+        assert message == "이메일·비밀번호 또는 관리자 권한을 확인해 주세요."
+        assert "set-cookie" not in login.headers
+        assert client.get("/status/api/overview").status_code == 401
+
+
+def test_spring_outage_keeps_token_login(engine, spring_login):
+    state, _ = spring_login
+    with TestClient(module.app) as client:
+        state["error"] = httpx.ConnectError("down")
+        assert client.post("/status/login", json=ACCOUNT).status_code == 503
+        state.update(error=None, status=502)
+        assert client.post("/status/login", json=ACCOUNT).status_code == 503
+        assert client.get("/status/api/overview").status_code == 401
+        assert client.post("/status/login", json={"token": "data-only-secret"}).status_code == 200
+        assert client.get("/status/api/overview").status_code == 200
+
+
+def test_spring_login_failures_are_rate_limited(engine, spring_login):
+    state, calls = spring_login
+    state["role"] = "USER"
+    with TestClient(module.app) as client:
+        for _ in range(status.LOGIN_FAILURES_PER_EMAIL):
+            assert client.post("/status/login", json=ACCOUNT).status_code == 401
+        # 대소문자·공백만 바꾼 같은 계정도 막고, 막힌 뒤에는 Spring을 호출하지 않는다.
+        blocked = client.post("/status/login", json={**ACCOUNT, "email": " Admin@Example.com"})
+        assert blocked.status_code == 429
+        assert len(calls) == status.LOGIN_FAILURES_PER_EMAIL
+        state["role"] = "ADMIN"
+        other = client.post("/status/login", json={**ACCOUNT, "email": "other@example.com"})
+        assert other.status_code == 200
+
+
+def test_account_login_requires_spring_configuration(engine, dashboard_settings):
+    with TestClient(module.app) as client:
+        assert 'data-spring-login="0"' in client.get("/status").text
+        assert client.post("/status/login", json=ACCOUNT).status_code == 503
+        assert client.post("/status/login", json={}).status_code == 503
 
 
 def test_expired_and_tampered_sessions_fail(engine, dashboard_settings):

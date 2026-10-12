@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -45,7 +46,59 @@ def valid_session(request: Request, token: str) -> bool:
 
 
 class Login(BaseModel):
-    token: str
+    token: str | None = Field(default=None, max_length=512)
+    email: str | None = Field(default=None, max_length=320)
+    password: str | None = Field(default=None, max_length=512)
+
+
+# Spring 로그인 대행이 비밀번호 대입 통로가 되지 않도록 실패 횟수를 제한한다.
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_FAILURES_PER_EMAIL = 5
+LOGIN_FAILURES_TOTAL = 30
+_login_failures: dict[str, list[float]] = {}
+
+
+def _recent_failures(key: str, now: float) -> list[float]:
+    recent = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+    if recent:
+        _login_failures[key] = recent
+    else:
+        _login_failures.pop(key, None)
+    return recent
+
+
+async def spring_admin_login(url: str, email: str, password: str) -> None:
+    """Spring 로그인으로 ADMIN 계정을 확인한다. 응답의 토큰은 보관하지 않는다."""
+    now = time.monotonic()
+    email_key = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    if (
+        len(_recent_failures(email_key, now)) >= LOGIN_FAILURES_PER_EMAIL
+        or len(_recent_failures("*", now)) >= LOGIN_FAILURES_TOTAL
+    ):
+        raise HTTPException(429, "로그인 시도가 많습니다. 잠시 후 다시 시도해 주세요.")
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            response = await client.post(url, json={"email": email, "password": password})
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            503, "Spring 인증 서버에 연결하지 못했습니다. 내부 토큰으로 로그인해 주세요."
+        ) from exc
+    if response.status_code >= 500 or response.status_code == 429:
+        raise HTTPException(
+            503, "Spring 인증 서버가 응답하지 않습니다. 내부 토큰으로 로그인해 주세요."
+        )
+    role = None
+    if response.status_code == 200:
+        try:
+            role = response.json()["data"]["role"]
+        except (ValueError, KeyError, TypeError):
+            role = None
+    if role != "ADMIN":
+        # 자격 증명 오류와 권한 부족을 구분해 알려주지 않는다.
+        for key in (email_key, "*"):
+            _login_failures.setdefault(key, []).append(now)
+        raise HTTPException(401, "이메일·비밀번호 또는 관리자 권한을 확인해 주세요.")
+    _login_failures.pop(email_key, None)
 
 
 class RefreshTarget(BaseModel):
@@ -118,8 +171,11 @@ async def retry_refresh(request: Request, session: SessionDep):
 
 @router.get("", response_class=HTMLResponse)
 async def page():
+    html = (Path(__file__).parent / "status.html").read_text()
+    if get_settings().spring_auth_login_url:
+        html = html.replace('data-spring-login="0"', 'data-spring-login="1"', 1)
     return HTMLResponse(
-        (Path(__file__).parent / "status.html").read_text(),
+        html,
         headers={
             "Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
@@ -133,8 +189,15 @@ async def page():
 
 @router.post("/login")
 async def login(body: Login, request: Request):
-    token = get_settings().internal_token
-    if token and not secrets.compare_digest(body.token.encode(), token.encode()):
+    settings = get_settings()
+    token = settings.internal_token
+    if token and body.token is None:
+        if not settings.spring_auth_login_url:
+            raise HTTPException(503, "계정 로그인이 설정되지 않았습니다. 내부 토큰을 써 주세요.")
+        if not body.email or not body.password:
+            raise HTTPException(401, "이메일과 비밀번호를 입력해 주세요.")
+        await spring_admin_login(settings.spring_auth_login_url, body.email, body.password)
+    elif token and not secrets.compare_digest(body.token.encode(), token.encode()):
         raise HTTPException(401, "Data 서버 내부 토큰을 확인해 주세요.")
     response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
     if token:

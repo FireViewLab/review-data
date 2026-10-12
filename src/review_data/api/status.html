@@ -452,7 +452,13 @@
       }
       .login-dialog input {
         width: 100%;
-        margin: 16px 0 12px;
+        margin: 0 0 12px;
+      }
+      .login-dialog p {
+        margin: 16px 0;
+      }
+      .login-dialog .link {
+        margin-top: 12px;
       }
       .login-dialog .btn {
         width: 100%;
@@ -567,7 +573,7 @@
       }
     </style>
   </head>
-  <body>
+  <body data-spring-login="0">
     <aside>
       <div class="brand">Re:<em>view</em><small>DATA OPERATIONS</small></div>
       <button class="nav active" data-tab="overview">
@@ -719,20 +725,41 @@
     <div id="login-modal" class="modal hidden">
       <form class="dialog login-dialog" id="login-form">
         <h2>운영 대시보드 로그인</h2>
-        <p>Data 서버 내부 토큰을 입력해 주세요.</p>
-        <input
-          id="token"
-          type="password"
-          autocomplete="off"
-          placeholder="X-Internal-Token"
-          required
-          aria-label="내부 토큰"
-        /><button class="btn primary">로그인</button>
+        <div id="login-account">
+          <p>re-view 관리자 계정으로 로그인해 주세요.</p>
+          <input
+            id="email"
+            type="email"
+            name="username"
+            autocomplete="username"
+            placeholder="이메일"
+            aria-label="이메일"
+          /><input
+            id="password"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            placeholder="비밀번호"
+            aria-label="비밀번호"
+          />
+        </div>
+        <div id="login-token" class="hidden">
+          <p>Data 서버 내부 토큰을 입력해 주세요.</p>
+          <input
+            id="token"
+            type="password"
+            autocomplete="off"
+            placeholder="X-Internal-Token"
+            aria-label="내부 토큰"
+          />
+        </div>
+        <button class="btn primary">로그인</button>
         <div id="login-error" class="sub error" role="alert"></div>
         <div class="sub">
-          AI 서버 토큰과는 별개입니다.<br />인증은 8시간 유지되며 토큰을
+          <span id="login-note"></span><br />인증은 8시간 유지되며 입력값을
           브라우저 저장소에 보관하지 않습니다.
         </div>
+        <button type="button" class="link hidden" id="login-mode"></button>
       </form>
     </div>
     <div id="detail-modal" class="modal hidden">
@@ -821,13 +848,13 @@
         if (r.status === 401) {
           $("login-modal").classList.remove("hidden");
           $("connection").textContent = "인증 필요";
-          throw Error("운영 토큰으로 로그인해 주세요.");
+          throw Error("로그인해 주세요.");
         }
         if (!r.ok) {
           const failure = await r.json().catch(() => null);
           throw Error(
-            typeof failure?.detail === "string"
-              ? failure.detail
+            typeof failure?.error?.message === "string"
+              ? failure.error.message
               : "조회에 실패했습니다 (" +
                   r.status +
                   "). 잠시 후 다시 시도해 주세요.",
@@ -1317,20 +1344,53 @@
         loadList().catch(showError);
       };
       $("refresh").onclick = refresh;
+      const springLogin = document.body.dataset.springLogin === "1";
+      let accountLogin = springLogin;
+      function showLoginMode() {
+        $("login-account").classList.toggle("hidden", !accountLogin);
+        $("login-token").classList.toggle("hidden", accountLogin);
+        $("email").required = $("password").required = accountLogin;
+        $("token").required = !accountLogin;
+        $("login-note").textContent = accountLogin
+          ? "관리자 권한 계정만 접근할 수 있습니다."
+          : "AI 서버 토큰과는 별개입니다.";
+        $("login-mode").classList.toggle("hidden", !springLogin);
+        $("login-mode").textContent = accountLogin
+          ? "내부 토큰으로 로그인 →"
+          : "관리자 계정으로 로그인 →";
+        $("login-error").textContent = "";
+      }
+      $("login-mode").onclick = () => {
+        accountLogin = !accountLogin;
+        showLoginMode();
+      };
+      showLoginMode();
       $("login-form").onsubmit = async (e) => {
         e.preventDefault();
         $("login-error").textContent = "";
+        const body = accountLogin
+          ? { email: $("email").value, password: $("password").value }
+          : { token: $("token").value };
         try {
-          await api("/login", {
+          const r = await fetch("/status/login", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: $("token").value }),
+            body: JSON.stringify(body),
           });
-          $("token").value = "";
+          if (!r.ok) {
+            const failure = await r.json().catch(() => null);
+            throw Error(
+              typeof failure?.error?.message === "string"
+                ? failure.error.message
+                : "로그인하지 못했습니다.",
+            );
+          }
+          $("token").value = $("password").value = "";
           $("login-modal").classList.add("hidden");
           await refresh();
         } catch (e) {
-          $("token").value = "";
+          $("token").value = $("password").value = "";
           $("login-error").textContent = e.message;
         }
       };
