@@ -291,6 +291,8 @@ class AnalysisRefreshService:
 
 
 async def campaign_status(session, *, enabled=True):
+    # input_payload는 상품당 리뷰 수백 건이라 읽는 것만으로 느리다. 조건은 앞에서부터 평가되므로
+    # 가벼운 조건을 먼저 두어 진행 중 항목과 최근 15분 완료분에서만 읽게 한다.
     rows = [
         dict(row)
         for row in (
@@ -313,14 +315,13 @@ async def campaign_status(session, *, enabled=True):
                greatest(c.created_at,now()-interval '15 min') AS sample_started_at,
                count(*) FILTER(WHERE j.status='done'
                    AND j.model_version=c.model_version AND j.policy_version=c.policy_version
+                   AND j.completed_at>=greatest(c.created_at,now()-interval '15 min')
                    AND j.input_payload->>'model_version'=c.model_version
-                   AND j.input_payload->>'policy_version'=c.policy_version
-                   AND j.completed_at>=greatest(c.created_at,now()-interval '15 min'))
+                   AND j.input_payload->>'policy_version'=c.policy_version)
                    AS recent_done,
                max(j.completed_at) FILTER(WHERE j.status='done'
-                   AND j.model_version=c.model_version AND j.policy_version=c.policy_version
-                   AND j.input_payload->>'model_version'=c.model_version
-                   AND j.input_payload->>'policy_version'=c.policy_version) AS last_done_at
+                   AND j.model_version=c.model_version AND j.policy_version=c.policy_version)
+                   AS last_done_at
         FROM (SELECT * FROM analysis_campaigns ORDER BY id DESC LIMIT 5) c
         LEFT JOIN analysis_campaign_items i ON i.campaign_id=c.id
         LEFT JOIN analysis_jobs j ON j.id=i.analysis_job_id

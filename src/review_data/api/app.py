@@ -109,6 +109,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sampler_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sampler_task
+        refresh_task = getattr(app.state, "status_refresh_task", None)
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await refresh_task
         await engine.dispose()
 
 
