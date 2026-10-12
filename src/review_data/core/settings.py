@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Spring·AI 등 내부 서버만 API를 호출하도록 공유하는 토큰. 로컬 개발에서는
     # 값을 비워 기존처럼 인증 없이 쓸 수 있다.
     internal_token: str | None = None
+    # /status 로그인을 Spring 계정으로 대행할 때 호출하는 로그인 URL. 비우면 내부 토큰
+    # 로그인만 쓴다. 예: https://api.re-view.kr/api/auth/login
+    spring_auth_login_url: str | None = None
 
     # 신선도 기준 시간(초). 상품 정보(가격/평점)보다 리뷰가 더 자주 바뀌므로 따로 둔다.
     # 둘 중 하나라도 오래됐으면 재수집 job을 만든다.

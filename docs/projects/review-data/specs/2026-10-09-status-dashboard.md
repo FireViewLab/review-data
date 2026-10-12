@@ -5,6 +5,7 @@
 - 운영 화면: `https://data.re-view.kr/status` (같은 서버의 `data.beens.kr/status`도 사용 가능).
 - 화면 틀만 공개한다. 데이터 API는 기존 Data `INTERNAL_TOKEN` 또는 대시보드 로그인 쿠키가 필요하다. AI 인증 토큰과는 다르다.
 - 로그인은 `POST /status/login`, 로그아웃은 `POST /status/logout`이다. 토큰은 브라우저 저장소에 저장하지 않는다. `/status`에만 적용되는 HttpOnly·SameSite=Strict 쿠키를 8시간 발급한다. HTTPS에서는 Secure를 설정한다.
+- `SPRING_AUTH_LOGIN_URL`을 설정하면 로그인 창이 이메일·비밀번호를 받는다. Data 서버가 Spring 로그인 API를 대신 호출하고 응답 role이 `ADMIN`일 때만 같은 쿠키를 발급한다. 비밀번호와 Spring 토큰은 저장·기록하지 않는다. 자격 증명 오류와 권한 부족은 같은 401로 응답하며, 실패는 계정당 15분에 5회·전체 30회로 제한한다(429). Spring 장애 시에는 503이며 내부 토큰 로그인으로 전환할 수 있다. Spring 코드는 변경하지 않는다.
 - 쿠키는 기존 수집 API를 인증하지 않는다. 운영 응답은 `Cache-Control: no-store`이다. 로컬에서 내부 토큰 미설정 시 기존 개발 인증 정책과 같이 열려 있다.
 
 ## 표시 항목
