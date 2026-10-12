@@ -122,10 +122,17 @@ class AnalysisRefreshService:
             return {"enabled": True, "campaign_id": campaign.id, "reserved": 0, **transition}
         await self._reconcile(campaign)
         await self._attach_active(campaign)
+        # 여유는 이 캠페인이 예약한 작업만으로 센다. 일반 분석 대기열까지 세면 재시도 몇 건이
+        # 대기열이 빌 때까지 예약되지 않고, 그동안 수집이 멈춘 채로 남는다.
         active = await self.session.scalar(
             select(func.count())
-            .select_from(AnalysisJob)
-            .where(AnalysisJob.status.in_(["queued", "running"]))
+            .select_from(AnalysisCampaignItem)
+            .join(AnalysisJob, AnalysisJob.id == AnalysisCampaignItem.analysis_job_id)
+            .where(
+                AnalysisCampaignItem.campaign_id == campaign.id,
+                AnalysisCampaignItem.status == "active",
+                AnalysisJob.status.in_(["queued", "running"]),
+            )
         )
         room = min(s.analysis_refresh_batch_size, max(0, s.analysis_refresh_max_pending - active))
         items = (
