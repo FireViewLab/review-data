@@ -532,7 +532,11 @@ async def test_snapshot_migration_roundtrip_keeps_old_rows(engine):
                         "script_location", str(Path(__file__).resolve().parents[1] / "alembic")
                     )
                     scripts = ScriptDirectory.from_config(cfg)
-                    revisions = list(reversed(list(scripts.iterate_revisions("head", "base"))))
+                    # 이후의 CONCURRENTLY 인덱스 마이그레이션은 되돌릴 트랜잭션 안에서 실행할 수
+                    # 없어 제외한다. 그 리비전은 실제 upgrade/downgrade로 따로 검증한다.
+                    revisions = list(
+                        reversed(list(scripts.iterate_revisions("c79fa18d2e60", "base")))
+                    )
                     with Operations.context(MigrationContext.configure(sync)):
                         for revision in revisions[:-1]:
                             revision.module.upgrade()
