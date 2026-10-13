@@ -313,13 +313,14 @@ async def build_overview(app, session) -> dict:
             session,
             """
         SELECT (SELECT count(*) FROM products) AS products,
-               (SELECT count(*) FROM review_analyses a JOIN (
-                   SELECT DISTINCT ON (platform,product_id) id FROM analysis_jobs
+               -- 결과 행(수십만 건)을 세지 않고 작업에 기록된 결과 건수를 더한다.
+               (SELECT coalesce(sum((result->>'review_count')::int),0) FROM (
+                   SELECT DISTINCT ON (platform,product_id) result FROM analysis_jobs
                    WHERE model_version=:model AND policy_version=:policy
                      AND (status='done' OR (status='stale' AND completed_at IS NOT NULL
                           AND result IS NOT NULL))
                    ORDER BY platform,product_id,completed_at DESC NULLS LAST,id DESC
-                ) latest ON latest.id=a.analysis_job_id) AS analysis_results,
+                ) latest) AS analysis_results,
                (SELECT count(*) FROM products p WHERE NOT EXISTS
                   (SELECT 1 FROM reviews r WHERE r.platform=p.platform
                    AND r.product_id=p.product_id)) AS empty_products

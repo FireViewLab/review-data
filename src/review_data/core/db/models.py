@@ -83,6 +83,9 @@ class ReviewRow(Base):
             text("written_at DESC NULLS LAST"),
             text("review_id DESC"),
         ),
+        # 운영 화면의 최근 수집 추이를 전체 스캔 없이 범위 조회한다. 최초 수집 시각은
+        # 바뀌지 않으므로 재관측 UPDATE 비용을 늘리지 않는다.
+        Index("idx_reviews_first_collected_at", "first_collected_at"),
     )
 
     platform: Mapped[str] = mapped_column(Text)
