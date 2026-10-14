@@ -164,6 +164,27 @@ class ProductDiscoveryService:
                 if not await self._room(session):
                     break
             platform, keyword = tasks[position % len(tasks)]
+            async with self.factory() as session:
+                paused, probing = await CollectionJobRepository(session).blocked_platforms(
+                    self.settings.schedule_platform_block_seconds, datetime.now(UTC)
+                )
+            if platform in paused | probing:
+                # 차단된 플랫폼에는 검색도 보내지 않는다. 회복 확인은 정기 수집이 맡는다.
+                async with self.factory() as session:
+                    await session.execute(
+                        select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY))
+                    )
+                    state = await session.scalar(
+                        select(DiscoveryState)
+                        .where(DiscoveryState.key == STATE_KEY)
+                        .with_for_update()
+                    )
+                    if state.lease_token != token:
+                        return result
+                    position += 1
+                    state.position = position
+                    await session.commit()
+                continue
             limit = min(
                 self.settings.discovery_max_limit,
                 self.settings.discovery_initial_limit
