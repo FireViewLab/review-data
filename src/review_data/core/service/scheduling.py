@@ -37,7 +37,11 @@ class SchedulingService:
         # 대기 수를 세고 예약하는 사이에 다른 스케줄러가 끼어들면 둘 다 "자리가 있다"고
         # 보고 상한을 넘긴다. 트랜잭션이 끝날 때까지 스케줄러를 한 번에 하나만 돌린다.
         await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
-        pending = await self.jobs.count_pending()
+        # 차단된 플랫폼은 통째로 쉬고, 대기가 끝난 플랫폼은 한 건만 시험한다.
+        paused, probing = await self.jobs.blocked_platforms(
+            self.settings.schedule_platform_block_seconds, now
+        )
+        pending = await self.jobs.count_pending(paused)
         from review_data.core.service.analysis_refresh import collection_paused
 
         if await collection_paused(self.session, self.settings):
@@ -46,12 +50,28 @@ class SchedulingService:
         if room <= 0:
             return ScheduleResult(pending_before=pending, created=0)
 
-        candidates = await self.jobs.list_refresh_candidates(
-            product_cutoff=now - timedelta(seconds=self.settings.product_ttl_seconds),
-            review_cutoff=now - timedelta(seconds=self.settings.review_ttl_seconds),
-            failure_cutoff=now - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
-            limit=room,
-            excluded_platforms=self.settings.excluded_platforms(),
+        cutoffs = {
+            "product_cutoff": now - timedelta(seconds=self.settings.product_ttl_seconds),
+            "review_cutoff": now - timedelta(seconds=self.settings.review_ttl_seconds),
+            "failure_cutoff": now
+            - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
+            "now": now,
+        }
+        excluded = self.settings.excluded_platforms()
+        probing -= set(excluded)
+        candidates = []
+        for platform in sorted(probing):
+            if len(candidates) >= room:
+                break
+            if await self.jobs.has_active_job(platform):
+                continue
+            candidates += await self.jobs.list_refresh_candidates(
+                **cutoffs, limit=1, excluded_platforms=excluded, only_platforms=(platform,)
+            )
+        candidates += await self.jobs.list_refresh_candidates(
+            **cutoffs,
+            limit=room - len(candidates),
+            excluded_platforms=(*excluded, *sorted(paused | probing)),
         )
         created = 0
         for platform, product_id in candidates:
