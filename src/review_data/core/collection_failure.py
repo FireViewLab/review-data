@@ -1,5 +1,7 @@
 """수집 실패의 안전한 분류와 정기 재예약 대기 정책."""
 
+import httpx
+
 from review_data.core.exceptions import (
     AccessBlockedError,
     MissingCredentialError,
@@ -34,11 +36,32 @@ def failure_kind(error: Exception | str) -> str:
         return "blocked"
     if isinstance(error, TimeoutError):
         return "timeout"
+    if isinstance(error, httpx.HTTPStatusError):
+        # 403·429는 사이트가 요청을 막거나 줄이라는 신호다. 원인 미상으로 두면 짧게 쉬고
+        # 다시 두드려 차단을 길게 만든다.
+        status = error.response.status_code
+        if status in (403, 429):
+            return "blocked"
+        if status in (404, 410):
+            return "not_found"
+        if status >= 500:
+            return "network"
     # 기존 collector/이력은 문자열 오류만 남기므로 명확한 신호만 보완한다.
     message = (
         f"{type(error).__name__}: {error}" if isinstance(error, Exception) else error
     ).lower()
-    if any(x in message for x in ("차단", "captcha", "cloudflare", "http 403", "http 429")):
+    if any(
+        x in message
+        for x in (
+            "차단",
+            "captcha",
+            "cloudflare",
+            "http 403",
+            "http 429",
+            "403 forbidden",
+            "429 too many requests",
+        )
+    ):
         return "blocked"
     if "저장 실패" in message:
         return "storage"

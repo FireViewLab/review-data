@@ -263,6 +263,144 @@ async def test_excluded_platform_is_never_scheduled(session_factory):
     assert result.created == 0
 
 
+async def _add_blocked_job(session_factory, platform, product_id, hours_ago, status="partial"):
+    async with session_factory() as s:
+        s.add(
+            CollectionJob(
+                platform=platform,
+                product_id=product_id,
+                idempotency_key="k",
+                status=status,
+                failure_kind="blocked" if status != "succeeded" else None,
+                completed_at=NOW - timedelta(hours=hours_ago),
+            )
+        )
+        await s.commit()
+
+
+async def test_blocked_platform_pauses_then_probes_one_then_recovers(session_factory):
+    other = "otherplat"
+    for i in range(3):
+        await _add_product(session_factory, f"b{i}", product_age_hours=48, review_age_hours=48)
+    async with session_factory() as s:
+        await ProductRepository(s).upsert(
+            Product(platform=other, product_id="o", name="상품", url="https://x")
+        )
+        await s.execute(
+            update(ProductRow)
+            .where(ProductRow.platform == other)
+            .values(last_collected_at=NOW - timedelta(hours=48), reviews_last_collected_at=None)
+        )
+        await s.commit()
+    # 다른 상품의 성공 뒤에 차단이 났다. 상품별 대기만 보면 b0~b2 는 예약 대상이다.
+    await _add_blocked_job(session_factory, PLATFORM, "b9", hours_ago=0.5)
+    await _add_blocked_job(session_factory, PLATFORM, "old-success", 3, status="succeeded")
+
+    settings = SETTINGS.model_copy(update={"schedule_platform_block_seconds": 3600})
+    await _schedule(session_factory, settings)
+    assert {(j.platform, j.product_id) for j in await _jobs(session_factory)} == {(other, "o")}
+
+    # 대기 시간이 지나면 한 건만 시험한다. 시험 작업이 끝나기 전에는 더 예약하지 않는다.
+    later = settings.model_copy(update={"schedule_platform_block_seconds": 600})
+    await _schedule(session_factory, later)
+    await _schedule(session_factory, later)
+    probes = [j for j in await _jobs(session_factory) if j.platform == PLATFORM]
+    assert len(probes) == 1
+
+    # 시험이 성공하면 평소대로 남은 상품을 모두 예약한다.
+    async with session_factory() as s:
+        await s.execute(
+            update(CollectionJob)
+            .where(CollectionJob.id == probes[0].id)
+            .values(status="succeeded", completed_at=NOW - timedelta(minutes=1))
+        )
+        await s.commit()
+    await _schedule(session_factory, later)
+    scheduled = [j for j in await _jobs(session_factory) if j.platform == PLATFORM]
+    assert len(scheduled) == 3
+
+
+async def test_paused_platform_keeps_queued_automatic_jobs_and_frees_queue(session_factory):
+    other = "otherplat"
+    await _add_blocked_job(session_factory, PLATFORM, "x", hours_ago=0)
+    async with session_factory() as s:
+        # 워커는 실제 현재 시각으로 판정하므로 차단 시각도 지금으로 맞춘다.
+        await s.execute(update(CollectionJob).values(completed_at=datetime.now(UTC)))
+        await s.commit()
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        for pid in ("a1", "a2"):
+            await ProductRepository(s).upsert(
+                Product(platform=PLATFORM, product_id=pid, name="상품", url="https://x")
+            )
+            await repo.create_or_get_active(PLATFORM, pid, requested_by="scheduler")
+        await ProductRepository(s).upsert(
+            Product(platform=other, product_id="o", name="상품", url="https://x")
+        )
+        await repo.create_or_get_active(other, "o", requested_by="scheduler")
+        await s.commit()
+
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        # 대기 중인 플랫폼의 자동 작업은 큐 여유 계산에서 빠진다.
+        paused, _ = await repo.blocked_platforms(3600, datetime.now(UTC))
+        assert paused == {PLATFORM} and await repo.count_pending(paused) == 1
+        # 워커도 그 작업을 꺼내지 않고 다른 플랫폼 작업만 가져간다.
+        job = await repo.claim_one("w", block_pause_seconds=3600)
+        assert job.platform == other
+        assert await repo.claim_one("w", block_pause_seconds=3600) is None
+        await s.commit()
+
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        # 사람이 요청한 작업은 차단 중에도 실행한다.
+        await repo.create_or_get_active(PLATFORM, "manual")
+        job = await repo.claim_one("w", block_pause_seconds=3600)
+        assert job.product_id == "manual"
+        await s.commit()
+
+
+async def test_probing_platform_runs_queued_jobs_one_at_a_time(session_factory):
+    await _add_blocked_job(session_factory, PLATFORM, "x", hours_ago=0)
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        for pid in ("a1", "a2"):
+            await ProductRepository(s).upsert(
+                Product(platform=PLATFORM, product_id=pid, name="상품", url="https://x")
+            )
+            await repo.create_or_get_active(PLATFORM, pid, requested_by="scheduler")
+        await s.commit()
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        # 대기 시간이 지나 시험 단계가 되면 한 번에 하나씩만 꺼낸다.
+        await s.execute(
+            update(CollectionJob)
+            .where(CollectionJob.product_id == "x")
+            .values(completed_at=datetime.now(UTC) - timedelta(hours=2))
+        )
+        assert (await repo.claim_one("w", block_pause_seconds=3600)).product_id == "a1"
+        assert await repo.claim_one("w", block_pause_seconds=3600) is None
+        await s.commit()
+
+
+async def test_legacy_unknown_403_history_counts_as_block(session_factory):
+    async with session_factory() as s:
+        s.add(
+            CollectionJob(
+                platform=PLATFORM,
+                product_id="legacy",
+                idempotency_key="k",
+                status="partial",
+                failure_kind="unknown",
+                last_error="unexpected: HTTPStatusError: Client error '403 Forbidden' for url",
+                completed_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+        paused, _ = await CollectionJobRepository(s).blocked_platforms(3600, datetime.now(UTC))
+        assert paused == {PLATFORM}
+
+
 async def test_concurrent_schedulers_respect_pending_limit(session_factory):
     """두 스케줄러가 동시에 돌아도 대기 상한을 넘기지 않는다."""
     settings = SETTINGS.model_copy(update={"schedule_max_pending": 1})

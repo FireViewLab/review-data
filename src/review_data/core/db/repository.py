@@ -8,7 +8,7 @@ Pydantic Product/Review(core/models.py) ↔ ORM row(core/db/models.py) 변환은
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -255,6 +255,26 @@ class ReviewRepository:
             )
 
 
+# 플랫폼별 마지막 차단·성공 시각. 차단이 성공보다 새로우면 그 플랫폼은 차단 상태다.
+# 분류 보강 전에 원인 미상으로 남은 403·429 이력도 차단으로 읽는다.
+PLATFORM_BLOCK_CTE = """
+platform_block AS (
+    SELECT platform,
+        max(completed_at) FILTER (WHERE failure_kind='blocked' OR (
+            coalesce(failure_kind,'unknown')='unknown' AND status IN ('partial','failed')
+            AND (last_error ILIKE '%403 Forbidden%' OR last_error ILIKE '%429 Too Many%')
+        )) AS last_blocked,
+        max(completed_at) FILTER (WHERE status='succeeded') AS last_success
+    FROM collection_jobs
+    WHERE status IN ('succeeded','partial','failed') AND completed_at IS NOT NULL
+    GROUP BY platform
+), blocked AS (
+    SELECT platform, last_blocked > :block_since AS paused FROM platform_block
+    WHERE last_blocked > coalesce(last_success, '-infinity'::timestamptz)
+)
+"""
+
+
 class CollectionJobRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -271,12 +291,50 @@ class CollectionJobRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def count_pending(self) -> int:
-        """아직 워커가 집지 않은 job 수. 스케줄러가 큐를 넘치게 하지 않으려고 본다."""
+    async def count_pending(self, paused_platforms: set[str] | None = None) -> int:
+        """아직 워커가 집지 않은 job 수. 스케줄러가 큐를 넘치게 하지 않으려고 본다.
+
+        차단으로 대기 중인 플랫폼의 자동 작업은 워커가 꺼내지 않으므로 세지 않는다. 세면
+        다른 플랫폼의 정기 수집까지 자리가 없다고 멈춘다.
+        """
         stmt = (
             select(func.count()).select_from(CollectionJob).where(CollectionJob.status == "pending")
         )
+        if paused_platforms:
+            stmt = stmt.where(
+                ~and_(
+                    CollectionJob.platform.in_(sorted(paused_platforms)),
+                    CollectionJob.requested_by.is_not(None),
+                )
+            )
         return (await self.session.execute(stmt)).scalar_one()
+
+    async def has_active_job(self, platform: str) -> bool:
+        return bool(
+            await self.session.scalar(
+                select(
+                    exists().where(
+                        CollectionJob.platform == platform,
+                        CollectionJob.status.in_(("pending", "running")),
+                    )
+                )
+            )
+        )
+
+    async def blocked_platforms(
+        self, pause_seconds: int, now: datetime
+    ) -> tuple[set[str], set[str]]:
+        """차단 상태 플랫폼을 (대기 중, 대기가 끝나 한 건씩 시험할 수 있음)으로 나눈다."""
+        if pause_seconds <= 0:
+            return set(), set()
+        rows = await self.session.execute(
+            text(f"WITH {PLATFORM_BLOCK_CTE} SELECT platform, paused FROM blocked"),
+            {"block_since": now - timedelta(seconds=pause_seconds)},
+        )
+        paused, probing = set(), set()
+        for platform, is_paused in rows:
+            (paused if is_paused else probing).add(platform)
+        return paused, probing
 
     async def list_refresh_candidates(
         self,
@@ -286,6 +344,8 @@ class CollectionJobRepository:
         failure_cutoff: datetime,
         limit: int,
         excluded_platforms: tuple[str, ...] = (),
+        only_platforms: tuple[str, ...] | None = None,
+        now: datetime | None = None,
     ) -> list[tuple[str, str]]:
         """다시 수집할 상품을 오래된 순으로 고른다.
 
@@ -317,7 +377,7 @@ class CollectionJobRepository:
             CollectionJob.id == latest_terminal,
             CollectionJob.status.in_(("failed", "partial")),
             or_(
-                CollectionJob.retry_after > func.now(),
+                CollectionJob.retry_after > (func.now() if now is None else now),
                 and_(
                     CollectionJob.retry_after.is_(None),
                     func.coalesce(CollectionJob.completed_at, CollectionJob.updated_at)
@@ -336,6 +396,7 @@ class CollectionJobRepository:
                     ProductRow.reviews_last_collected_at <= review_cutoff,
                 ),
                 ProductRow.platform.not_in(excluded_platforms),
+                True if only_platforms is None else ProductRow.platform.in_(only_platforms),
                 ~has_active_job,
                 ~failed_recently,
             )
@@ -383,6 +444,7 @@ class CollectionJobRepository:
         *,
         platform_caps: dict[str, int] | None = None,
         default_cap: int = DEFAULT_PLATFORM_CAP,
+        block_pause_seconds: int = 0,
     ) -> CollectionJob | None:
         """PENDING이거나 lease가 만료된 RUNNING job 하나를 원자적으로 가져간다.
 
@@ -394,8 +456,11 @@ class CollectionJobRepository:
         트랜잭션 안에서 원자적이지는 않아서, 여러 워커가 정확히 같은 순간에 claim 하면
         상한을 1~2개 넘길 수 있다. 자원 보호가 목적이라 이 정도 오차는 허용한다.
         """
+        # 차단된 플랫폼은 이미 예약된 자동 작업(스케줄러·발굴·시드)도 대기 중에는 꺼내지 않고,
+        # 대기가 끝나면 한 번에 하나만 실행해 회복을 확인한다. 사람이 요청한 작업은 그대로 간다.
         stmt = text(
-            """
+            f"""
+            WITH {PLATFORM_BLOCK_CTE}
             UPDATE collection_jobs
             SET status = 'running',
                 locked_by = :worker_id,
@@ -418,6 +483,15 @@ class CollectionJobRepository:
                   ) < coalesce(
                       (cast(:platform_caps as jsonb) ->> j.platform)::int, :default_cap
                   )
+                  AND (
+                      j.requested_by IS NULL OR :block_pause_seconds <= 0
+                      OR NOT EXISTS (SELECT 1 FROM blocked b WHERE b.platform = j.platform
+                          AND (b.paused OR EXISTS (
+                              SELECT 1 FROM collection_jobs other
+                              WHERE other.platform = j.platform AND other.id <> j.id
+                                AND other.status = 'running'
+                                AND other.lease_expires_at > now())))
+                  )
                 ORDER BY j.created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -432,6 +506,8 @@ class CollectionJobRepository:
                 "lease_seconds": lease_seconds,
                 "platform_caps": json.dumps(platform_caps or {}),
                 "default_cap": default_cap,
+                "block_pause_seconds": block_pause_seconds,
+                "block_since": datetime.now(UTC) - timedelta(seconds=block_pause_seconds),
             },
         )
         row = result.first()

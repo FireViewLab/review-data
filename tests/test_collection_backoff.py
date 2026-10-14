@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
 from review_data.core.collection_failure import failure_kind, retry_delay
@@ -9,6 +10,13 @@ from review_data.core.db.models import CollectionJob, ProductRow
 from review_data.core.db.repository import CollectionJobRepository
 from review_data.core.exceptions import AccessBlockedError, MissingCredentialError, ParseError
 from review_data.core.service.operations import operational_status
+
+
+def _status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://example.invalid/review")
+    return httpx.HTTPStatusError(
+        "x", request=request, response=httpx.Response(status, request=request)
+    )
 
 
 @pytest.mark.parametrize(
@@ -20,6 +28,14 @@ from review_data.core.service.operations import operational_status
         (TimeoutError(), "timeout"),
         ("product: HTTP 404", "not_found"),
         ("review 저장 실패", "storage"),
+        # 이전 이력에 남은 httpx 오류 문구도 차단으로 읽는다.
+        ("unexpected: HTTPStatusError: Client error '403 Forbidden' for url 'x'", "blocked"),
+        ("unexpected: HTTPStatusError: Client error '429 Too Many Requests'", "blocked"),
+        (_status_error(403), "blocked"),
+        (_status_error(429), "blocked"),
+        (_status_error(404), "not_found"),
+        (_status_error(503), "network"),
+        (_status_error(400), "unknown"),
     ],
 )
 def test_classification(error, kind):

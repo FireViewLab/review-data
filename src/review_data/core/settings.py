@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # 수집이 실패한 상품을 다시 예약하기까지 기다리는 시간(초). 차단된 플랫폼을
     # 주기마다 다시 두드리지 않기 위한 것이다.
     schedule_failure_cooldown_seconds: int = Field(default=6 * 60 * 60, ge=0)
+    # 플랫폼의 최근 차단(403·429 등)이 마지막 성공보다 새로우면 그 플랫폼 전체를 이 시간 동안
+    # 예약하지 않는다. 상품별 대기만으로는 다른 상품이 계속 요청을 보내 차단이 길어진다.
+    # 대기가 끝나면 한 건만 시험 예약하고, 성공해야 평소대로 돌아온다. 0 이면 끈다.
+    schedule_platform_block_seconds: int = Field(default=60 * 60, ge=0)
     # 스케줄러가 건드리지 않을 플랫폼(쉼표 구분). 플랫폼 전체가 차단돼 있으면 상품별
     # 대기만으로는 상품 수만큼 요청이 반복되므로 여기서 통째로 뺀다. 예: "gmarket,auction"
     schedule_excluded_platforms: str = ""
