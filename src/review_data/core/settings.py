@@ -14,7 +14,7 @@ import 만으로 .env 를 강제하거나 종료해버리면 호스트 앱이 �
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # src/review_data/core/settings.py -> 프로젝트 루트
@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # 예약하지 않는다. 상품별 대기만으로는 다른 상품이 계속 요청을 보내 차단이 길어진다.
     # 대기가 끝나면 한 건만 시험 예약하고, 성공해야 평소대로 돌아온다. 0 이면 끈다.
     schedule_platform_block_seconds: int = Field(default=60 * 60, ge=0)
+    # 플랫폼별 자동 수집 작업의 최소 시작 간격(초). "플랫폼=초"를 쉼표로 구분한다. 밀린 상품을
+    # 한꺼번에 요청하면 요청 제한에 걸리므로 일정한 속도로 나눠 보낸다. 사람이 요청한 수집은
+    # 제외한다. 올리브영은 시간당 약 60건으로 며칠간 정상이었고 230건으로 몰았을 때 차단됐다.
+    collection_platform_intervals: str = "oliveyoung=80,musinsa=60"
     # 스케줄러가 건드리지 않을 플랫폼(쉼표 구분). 플랫폼 전체가 차단돼 있으면 상품별
     # 대기만으로는 상품 수만큼 요청이 반복되므로 여기서 통째로 뺀다. 예: "gmarket,auction"
     schedule_excluded_platforms: str = ""
@@ -107,6 +111,21 @@ class Settings(BaseSettings):
     ai_model_version: str | None = None
     ai_policy_version: str | None = None
 
+    @field_validator("collection_platform_intervals")
+    @classmethod
+    def _check_platform_intervals(cls, value: str) -> str:
+        # 실행 중에 값이 틀린 것을 알면 모든 플랫폼의 수집이 멈춘다. 시작할 때 거부한다.
+        for item in value.split(","):
+            if not item.strip():
+                continue
+            name, sep, seconds = item.partition("=")
+            if not sep or not name.strip() or not seconds.strip().isdigit():
+                raise ValueError(f"'플랫폼=초' 형식이 아닙니다: {item.strip()!r}")
+            # 최근 시작 시각은 1시간까지만 본다. 그보다 긴 간격은 지켜지지 않는다.
+            if int(seconds) > 3600:
+                raise ValueError(f"수집 간격은 3600초 이하여야 합니다: {item.strip()!r}")
+        return value
+
     @model_validator(mode="after")
     def validate_analysis(self):
         if self.ai_internal_token is not None and not self.ai_internal_token.get_secret_value():
@@ -135,6 +154,15 @@ class Settings(BaseSettings):
     elevenst_api_key: str | None = None
     naver_client_id: str | None = None
     naver_client_secret: str | None = None
+
+    def platform_intervals(self) -> dict[str, int]:
+        """형식은 생성 시 검증하므로 여기서는 실패하지 않는다."""
+        intervals = {}
+        for item in self.collection_platform_intervals.split(","):
+            name, _, seconds = item.partition("=")
+            if name.strip():
+                intervals[name.strip()] = int(seconds)
+        return intervals
 
     def excluded_platforms(self) -> tuple[str, ...]:
         """예약과 시드가 같은 제외 목록을 써 차단 플랫폼을 다시 넣지 않게 한다."""
