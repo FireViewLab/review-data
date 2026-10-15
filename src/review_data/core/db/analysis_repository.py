@@ -2,10 +2,12 @@
 
 import hashlib
 import json
+import random
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION, select_reviews
 from review_data.core.db.analysis_control import effective_analysis_settings
@@ -54,6 +56,21 @@ FAILURE_REASONS = {
     "exhausted": "분석 최대 시도 횟수 초과",
 }
 FAILURE_KINDS = {reason: kind for kind, reason in FAILURE_REASONS.items()}
+
+
+def has_prior_result(job=AnalysisJob):
+    """같은 상품에 이미 게시된 분석 결과가 있는지. 없으면 첫 분석이다."""
+    prior = aliased(AnalysisJob)
+    return (
+        select(prior.id)
+        .where(
+            prior.platform == job.platform,
+            prior.product_id == job.product_id,
+            prior.status.in_(("done", "stale")),
+            prior.result.is_not(None),
+        )
+        .exists()
+    )
 
 
 class AnalysisRepository:
@@ -172,7 +189,14 @@ class AnalysisRepository:
             .limit(1)
         )
 
-    async def claim(self, worker_id: str, lease_seconds: float, *, backfill_only=False):
+    async def claim(
+        self,
+        worker_id: str,
+        lease_seconds: float,
+        *,
+        backfill_only=False,
+        reanalysis_share: float = 0.0,
+    ):
         now = datetime.now(UTC)
         await self.session.execute(
             update(AnalysisJob)
@@ -203,8 +227,16 @@ class AnalysisRepository:
                 AnalysisJob.available_at <= now,
                 (AnalysisJob.lease_expires_at.is_(None)) | (AnalysisJob.lease_expires_at <= now),
             )
-            # 캠페인이 진행 중인 동안 수집이 멈추므로 캠페인 작업을 먼저 끝낸다.
-            .order_by(in_campaign.desc(), AnalysisJob.id)
+            # 캠페인이 진행 중인 동안 수집이 멈추므로 캠페인 작업을 먼저 끝낸다. 그다음은 결과가
+            # 아직 없는 상품의 첫 분석이다. 재분석 대상은 새 결과 전까지 기존 결과를 보여 준다.
+            # 첫 분석이 끊이지 않아도 재분석이 굶지 않도록 일정 비율은 재분석을 먼저 꺼낸다.
+            .order_by(
+                in_campaign.desc(),
+                has_prior_result().desc()
+                if random.random() < reanalysis_share
+                else has_prior_result().asc(),
+                AnalysisJob.id,
+            )
             .with_for_update(skip_locked=True)
             .limit(1)
         )

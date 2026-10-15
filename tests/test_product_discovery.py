@@ -57,7 +57,9 @@ async def test_completed_rotation_increases_search_depth(session_factory):
     await service.run_once()
     assert {x[2] for x in Fake.calls} == {20}
     async with session_factory() as s:
+        # 검색어를 한 바퀴 다 돈 위치로 옮긴다. 한 회차 검색 수는 최대 16이라 직접 맞춘다.
         state = await s.get(DiscoveryState, STATE_KEY)
+        state.position = len(KEYWORDS["kurly"])
         state.next_run_at = datetime.now(UTC) - timedelta(seconds=1)
         await s.commit()
     Fake.calls = []
@@ -105,7 +107,7 @@ async def test_restart_recovers_expired_lease_and_retains_position(session_facto
         session_factory, {"kurly": Fake}, config(discovery_queries_per_cycle=1)
     )
     assert (await service.run_once())["attempted"] == 1
-    assert Fake.calls[0][1] == KEYWORDS["kurly"][5]
+    assert Fake.calls[0][1] == service.tasks()[5][1]
 
 
 async def test_one_failed_platform_does_not_block_next_platform(session_factory):
@@ -132,6 +134,30 @@ async def test_analysis_backlog_pauses_discovery_without_advancing(session_facto
     assert (await service.run_once())["attempted"] == 0
     async with session_factory() as s:
         assert await s.get(DiscoveryState, STATE_KEY) is None
+
+
+async def test_reanalysis_backlog_does_not_pause_discovery(session_factory):
+    async with session_factory() as s:
+        s.add(ProductRow(platform="kurly", product_id="p", name="상품", url="https://x"))
+        await s.flush()
+        # 이미 결과가 있는 상품의 재분석 대기는 신규 발굴을 막지 않는다.
+        s.add(AnalysisJob(platform="kurly", product_id="p", status="done", result={"x": 1}))
+        s.add(AnalysisJob(platform="kurly", product_id="p", status="queued"))
+        await s.commit()
+    service = ProductDiscoveryService(
+        session_factory,
+        {"kurly": Fake},
+        config(discovery_max_analysis_pending=1, discovery_queries_per_cycle=1),
+    )
+    assert (await service.run_once())["attempted"] == 1
+
+
+def test_tasks_alternate_platforms_over_all_keywords():
+    registry = {p: type(p, (Fake,), {"platform": p}) for p in KEYWORDS}
+    tasks = ProductDiscoveryService(None, registry, config()).tasks()
+    assert len(tasks) == sum(len(words) for words in KEYWORDS.values())
+    assert [platform for platform, _ in tasks[:4]] == list(KEYWORDS)
+    assert len(set(tasks)) == len(tasks)
 
 
 async def test_disabled_or_excluded_discovery_does_not_search(session_factory):

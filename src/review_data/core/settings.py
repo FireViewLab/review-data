@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     analysis_refresh_max_pending: int = Field(default=100, ge=1)
     analysis_refresh_batch_size: int = Field(default=20, ge=1, le=100)
     analysis_refresh_pause_collection: bool = True
+    # 일반 분석은 결과가 없는 상품의 첫 분석을 먼저 처리한다. 첫 분석이 계속 들어와도 재분석이
+    # 멈추지 않도록 이 비율만큼은 재분석을 먼저 꺼낸다.
+    analysis_reanalysis_share: float = Field(default=0.25, ge=0, le=1)
     ai_model_version: str | None = None
     ai_policy_version: str | None = None
 

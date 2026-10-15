@@ -32,6 +32,18 @@ async def queue_status(session):
             .one()
         )
         queues[name] = dict(row)
+    # 발굴은 결과가 없는 상품의 첫 분석 대기만으로 멈춘다(재분석 대기는 세지 않는다).
+    queues["analysis"]["first_time_pending"] = (
+        await session.execute(
+            text("""
+            SELECT count(*) FROM analysis_jobs q
+            WHERE q.status IN ('queued','running') AND NOT EXISTS (
+                SELECT 1 FROM analysis_jobs d WHERE d.platform=q.platform
+                    AND d.product_id=q.product_id AND d.status IN ('done','stale')
+                    AND d.result IS NOT NULL)
+        """)
+        )
+    ).scalar_one()
     return queues
 
 

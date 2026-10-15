@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from review_data.core.browser import BrowserCollector
+from review_data.core.db.analysis_repository import has_prior_result
 from review_data.core.db.models import AnalysisJob, DiscoveryState
 from review_data.core.db.repository import CollectionJobRepository
 from review_data.core.service.catalog import register_search_products
@@ -31,6 +32,30 @@ KEYWORDS = {
         "과자",
         "아이스크림",
         "고구마",
+        "닭가슴살",
+        "만두",
+        "샐러드",
+        "떡볶이",
+        "라면",
+        "소시지",
+        "베이컨",
+        "요거트",
+        "그래놀라",
+        "식빵",
+        "버터",
+        "올리브오일",
+        "참기름",
+        "된장",
+        "고추장",
+        "간장",
+        "밀키트",
+        "냉동피자",
+        "도시락",
+        "차",
+        "주스",
+        "생수",
+        "탄산수",
+        "한우",
     ),
     "oliveyoung": (
         "수분크림",
@@ -49,6 +74,30 @@ KEYWORDS = {
         "치약",
         "향수",
         "미스트",
+        "선크림",
+        "토너",
+        "에센스",
+        "세럼",
+        "앰플",
+        "마스크팩",
+        "클렌징폼",
+        "각질제거",
+        "파운데이션",
+        "프라이머",
+        "블러셔",
+        "아이라이너",
+        "립스틱",
+        "네일",
+        "바디로션",
+        "데오드란트",
+        "헤어오일",
+        "왁스",
+        "제모",
+        "면도기",
+        "영양제",
+        "단백질쉐이크",
+        "여드름패치",
+        "아이크림",
     ),
     "musinsa": (
         "맨투맨",
@@ -67,6 +116,30 @@ KEYWORDS = {
         "코트",
         "패딩",
         "트레이닝복",
+        "반팔티",
+        "긴팔티",
+        "후드티",
+        "니트",
+        "가디건",
+        "청바지",
+        "반바지",
+        "스커트",
+        "원피스",
+        "트렌치코트",
+        "플리스",
+        "베스트",
+        "로퍼",
+        "부츠",
+        "슬리퍼",
+        "백팩",
+        "토트백",
+        "선글라스",
+        "목걸이",
+        "반지",
+        "시계",
+        "속옷",
+        "잠옷",
+        "레인코트",
     ),
     "elevenst": (
         "세탁세제",
@@ -85,9 +158,35 @@ KEYWORDS = {
         "비타민",
         "유산균",
         "반려동물사료",
+        "섬유유연제",
+        "물티슈",
+        "기저귀",
+        "생리대",
+        "칫솔",
+        "샴푸",
+        "전기포트",
+        "에어프라이어",
+        "전자레인지",
+        "밥솥",
+        "블렌더",
+        "공기청정기",
+        "가습기",
+        "제습기",
+        "이어폰",
+        "헤드셋",
+        "보조배터리",
+        "스마트워치",
+        "태블릿거치대",
+        "노트북가방",
+        "캠핑의자",
+        "요가매트",
+        "덤벨",
+        "자전거헬멧",
     ),
 }
 STATE_KEY = "keyword-discovery-v1"
+# 2026-10-15 이전 검색어 수. 이후 추가분을 먼저 돈다.
+ORIGINAL_KEYWORDS = 16
 
 
 class ProductDiscoveryService:
@@ -105,7 +204,12 @@ class ProductDiscoveryService:
             and p in self.registry
             and not issubclass(self.registry[p], BrowserCollector)
         ]
-        return [(p, KEYWORDS[p][i]) for i in range(16) for p in platforms]
+        # 플랫폼을 번갈아 돌며 검색어를 하나씩 쓴다. 검색어 수가 달라도 짧은 쪽은 건너뛴다.
+        # 10/15에 늘린 검색어(17번째부터)를 앞에 두어, 위치를 처음부터 다시 돌 때 이미 깊게
+        # 검색한 기존 검색어보다 새 검색어가 먼저 나간다.
+        rounds = max((len(KEYWORDS[p]) for p in platforms), default=0)
+        order = [*range(ORIGINAL_KEYWORDS, rounds), *range(min(ORIGINAL_KEYWORDS, rounds))]
+        return [(p, KEYWORDS[p][i]) for i in order for p in platforms if i < len(KEYWORDS[p])]
 
     async def _room(self, session):
         if (
@@ -113,10 +217,12 @@ class ProductDiscoveryService:
             >= self.settings.schedule_max_pending
         ):
             return False
+        # 새 상품이 분석을 기다리는 만큼만 센다. 이미 결과가 있는 상품의 재분석이 쌓인 것만으로
+        # 신규 상품 유입을 막으면, 재수집이 계속되는 동안 발굴이 영영 돌지 않는다.
         analysis_pending = await session.scalar(
             select(func.count())
             .select_from(AnalysisJob)
-            .where(AnalysisJob.status.in_(("queued", "running")))
+            .where(AnalysisJob.status.in_(("queued", "running")), ~has_prior_result())
         )
         return analysis_pending < self.settings.discovery_max_analysis_pending
 

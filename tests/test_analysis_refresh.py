@@ -461,6 +461,45 @@ async def test_retry_is_reserved_and_processed_ahead_of_full_normal_queue(sessio
     assert client.ids[1] == min(normal)
 
 
+async def test_first_analysis_is_claimed_before_older_reanalysis(session_factory):
+    await seed(session_factory, count=1, version="v2")
+    settings = config().model_copy(
+        update={"analysis_refresh_enabled": False, "analysis_reanalysis_share": 0}
+    )
+    async with session_factory() as s:
+        # 결과가 있는 상품 0의 재분석이 먼저 쌓이고, 새 상품 n의 첫 분석이 뒤에 들어온다.
+        reanalysis = await AnalysisRepository(s).enqueue("kurly", "0", settings, force=True)
+        s.add(ProductRow(platform="kurly", product_id="n", name="새 상품", url="https://x"))
+        await s.flush()
+        s.add(ReviewRow(platform="kurly", product_id="n", review_id="r", content="리뷰"))
+        await s.flush()
+        first = await AnalysisRepository(s).enqueue("kurly", "n", settings)
+        await s.commit()
+    assert reanalysis < first
+    client = Client()
+    assert await run_once(session_factory, "w", settings=settings, client=client)
+    assert client.ids == [first]
+
+
+async def test_reanalysis_share_keeps_old_reanalysis_moving(session_factory):
+    await seed(session_factory, count=1, version="v2")
+    settings = config().model_copy(
+        update={"analysis_refresh_enabled": False, "analysis_reanalysis_share": 1}
+    )
+    async with session_factory() as s:
+        reanalysis = await AnalysisRepository(s).enqueue("kurly", "0", settings, force=True)
+        s.add(ProductRow(platform="kurly", product_id="n", name="새 상품", url="https://x"))
+        await s.flush()
+        s.add(ReviewRow(platform="kurly", product_id="n", review_id="r", content="리뷰"))
+        await s.flush()
+        await AnalysisRepository(s).enqueue("kurly", "n", settings)
+        await s.commit()
+    # 재분석 몫에 해당하는 회차에는 첫 분석이 있어도 재분석을 먼저 꺼낸다.
+    client = Client()
+    assert await run_once(session_factory, "w", settings=settings, client=client)
+    assert client.ids == [reanalysis]
+
+
 async def test_backfill_extra_worker_leaves_normal_jobs_untouched(session_factory):
     await seed(session_factory, count=2, version="v2", done=False)
     client = Client()

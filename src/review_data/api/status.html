@@ -951,7 +951,10 @@
       }
       function discoveryState(d) {
         const s = d.settings,
-          analysis = Number(d.queues.analysis.waiting) + Number(d.queues.analysis.running);
+          analysis = Number(
+            d.queues.analysis.first_time_pending ??
+              Number(d.queues.analysis.waiting) + Number(d.queues.analysis.running),
+          );
         if (!s.discovery_enabled) return ["offline", "비활성", ""];
         if (s.collection_paused)
           return ["partial", "대기", "Backfill 진행 중에는 발굴을 쉽니다."];
@@ -959,7 +962,7 @@
           return [
             "partial",
             "대기",
-            `분석 대기열 ${num(analysis)}건이 기준 ${num(s.discovery_max_analysis_pending)}건 이상이라 발굴을 건너뜁니다.`,
+            `새 상품 첫 분석 대기 ${num(analysis)}건이 기준 ${num(s.discovery_max_analysis_pending)}건 이상이라 발굴을 건너뜁니다.`,
           ];
         if (Number(d.queues.collection.waiting) >= s.schedule_max_pending)
           return [
