@@ -6,6 +6,7 @@
 실제 크롤링은 워커가 한다. 여기서는 job 을 만들기만 한다.
 """
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -42,6 +43,17 @@ class SchedulingService:
             self.settings.schedule_platform_block_seconds, now
         )
         pending = await self.jobs.count_pending(paused)
+        excluded = self.settings.excluded_platforms()
+        # 간격을 둔 플랫폼은 한 주기 동안 워커가 시작할 수 있는 건수만 예약한다. 더 넣으면
+        # 그 플랫폼 작업이 큐를 채워 다른 플랫폼의 정기 수집까지 자리를 잃는다.
+        paced = {
+            platform: math.ceil(self.settings.schedule_interval_seconds / seconds)
+            for platform, seconds in self.settings.platform_intervals().items()
+            if seconds > 0 and platform not in paused | probing | set(excluded)
+        }
+        waiting = await self.jobs.count_pending_by_platform(automatic_only=True)
+        # 발굴 등으로 몫보다 많이 쌓인 작업은 천천히 빠지므로 큐 여유 계산에서 뺀다.
+        pending -= sum(max(0, waiting.get(p, 0) - share) for p, share in paced.items())
         from review_data.core.service.analysis_refresh import collection_paused
 
         if await collection_paused(self.session, self.settings):
@@ -57,7 +69,6 @@ class SchedulingService:
             - timedelta(seconds=self.settings.schedule_failure_cooldown_seconds),
             "now": now,
         }
-        excluded = self.settings.excluded_platforms()
         probing -= set(excluded)
         candidates = []
         for platform in sorted(probing):
@@ -68,11 +79,23 @@ class SchedulingService:
             candidates += await self.jobs.list_refresh_candidates(
                 **cutoffs, limit=1, excluded_platforms=excluded, only_platforms=(platform,)
             )
-        candidates += await self.jobs.list_refresh_candidates(
-            **cutoffs,
-            limit=room - len(candidates),
-            excluded_platforms=(*excluded, *sorted(paused | probing)),
+        # 큐 여유가 작을 때 같은 플랫폼만 먼저 받지 않도록 가장 오래 쉰 플랫폼부터 배분한다.
+        last_start = await self.jobs.last_start_by_platform()
+        oldest_first = sorted(
+            paced, key=lambda p: (last_start.get(p) or datetime.min.replace(tzinfo=UTC), p)
         )
+        for platform in oldest_first:
+            share = min(paced[platform] - waiting.get(platform, 0), room - len(candidates))
+            if share > 0:
+                candidates += await self.jobs.list_refresh_candidates(
+                    **cutoffs, limit=share, excluded_platforms=excluded, only_platforms=(platform,)
+                )
+        if room > len(candidates):
+            candidates += await self.jobs.list_refresh_candidates(
+                **cutoffs,
+                limit=room - len(candidates),
+                excluded_platforms=(*excluded, *sorted(paused | probing | set(paced))),
+            )
         created = 0
         for platform, product_id in candidates:
             # 후보를 고른 뒤 조회 API 나 다른 스케줄러가 먼저 job 을 만들었을 수 있다.
