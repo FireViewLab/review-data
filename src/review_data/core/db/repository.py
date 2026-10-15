@@ -255,6 +255,9 @@ class ReviewRepository:
             )
 
 
+# 수집 작업 claim 을 직렬화하는 advisory lock 키(스케줄러 키와 겹치지 않게 고정값).
+_COLLECTION_CLAIM_LOCK_KEY = 7_204_311_552
+
 # 플랫폼별 마지막 차단·성공 시각. 차단이 성공보다 새로우면 그 플랫폼은 차단 상태다.
 # 분류 보강 전에 원인 미상으로 남은 403·429 이력도 차단으로 읽는다.
 PLATFORM_BLOCK_CTE = """
@@ -308,6 +311,22 @@ class CollectionJobRepository:
                 )
             )
         return (await self.session.execute(stmt)).scalar_one()
+
+    async def count_pending_by_platform(self, *, automatic_only: bool = False) -> dict[str, int]:
+        stmt = (
+            select(CollectionJob.platform, func.count())
+            .where(CollectionJob.status == "pending")
+            .group_by(CollectionJob.platform)
+        )
+        if automatic_only:
+            stmt = stmt.where(CollectionJob.requested_by.is_not(None))
+        return dict((await self.session.execute(stmt)).all())
+
+    async def last_start_by_platform(self) -> dict[str, datetime]:
+        stmt = select(CollectionJob.platform, func.max(CollectionJob.locked_at)).group_by(
+            CollectionJob.platform
+        )
+        return {platform: at for platform, at in (await self.session.execute(stmt)).all() if at}
 
     async def has_active_job(self, platform: str) -> bool:
         return bool(
@@ -445,6 +464,7 @@ class CollectionJobRepository:
         platform_caps: dict[str, int] | None = None,
         default_cap: int = DEFAULT_PLATFORM_CAP,
         block_pause_seconds: int = 0,
+        platform_intervals: dict[str, int] | None = None,
     ) -> CollectionJob | None:
         """PENDING이거나 lease가 만료된 RUNNING job 하나를 원자적으로 가져간다.
 
@@ -460,7 +480,10 @@ class CollectionJobRepository:
         # 대기가 끝나면 한 번에 하나만 실행해 회복을 확인한다. 사람이 요청한 작업은 그대로 간다.
         stmt = text(
             f"""
-            WITH {PLATFORM_BLOCK_CTE}
+            WITH {PLATFORM_BLOCK_CTE}, recent_start AS (
+                SELECT platform, max(locked_at) AS last_start FROM collection_jobs
+                WHERE locked_at > now() - interval '1 hour' GROUP BY platform
+            )
             UPDATE collection_jobs
             SET status = 'running',
                 locked_by = :worker_id,
@@ -492,6 +515,14 @@ class CollectionJobRepository:
                                 AND other.status = 'running'
                                 AND other.lease_expires_at > now())))
                   )
+                  -- 같은 플랫폼의 직전 작업 시작 후 설정 간격이 지나야 다음 자동 작업을 시작한다.
+                  AND (
+                      j.requested_by IS NULL
+                      OR coalesce((cast(:platform_intervals as jsonb) ->> j.platform)::int, 0) <= 0
+                      OR NOT EXISTS (SELECT 1 FROM recent_start r WHERE r.platform = j.platform
+                          AND r.last_start > now() - make_interval(
+                              secs => (cast(:platform_intervals as jsonb) ->> j.platform)::int))
+                  )
                 ORDER BY j.created_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -499,6 +530,12 @@ class CollectionJobRepository:
             RETURNING id
             """
         )
+        if platform_intervals or block_pause_seconds > 0:
+            # 간격·시험 단계는 다른 워커가 방금 시작한 작업을 봐야 지켜진다. claim 을 한 번에
+            # 하나씩 하고, 잠금을 얻은 뒤의 새 문장이 앞선 claim 의 커밋을 보게 한다.
+            await self.session.execute(
+                select(func.pg_advisory_xact_lock(_COLLECTION_CLAIM_LOCK_KEY))
+            )
         result = await self.session.execute(
             stmt,
             {
@@ -508,6 +545,7 @@ class CollectionJobRepository:
                 "default_cap": default_cap,
                 "block_pause_seconds": block_pause_seconds,
                 "block_since": datetime.now(UTC) - timedelta(seconds=block_pause_seconds),
+                "platform_intervals": json.dumps(platform_intervals or {}),
             },
         )
         row = result.first()

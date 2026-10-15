@@ -401,6 +401,85 @@ async def test_legacy_unknown_403_history_counts_as_block(session_factory):
         assert paused == {PLATFORM}
 
 
+def test_platform_intervals_parse():
+    settings = Settings(_env_file=None, collection_platform_intervals=" a=80, b=0,")
+    assert settings.platform_intervals() == {"a": 80, "b": 0}
+
+
+@pytest.mark.parametrize("value", ["a=80s", "a", "a=-80", "=80", "a=3601"])
+def test_invalid_platform_intervals_are_rejected_at_startup(value):
+    # 실행 중에 알면 모든 플랫폼 수집이 멈추므로 설정을 읽을 때 거부한다.
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, collection_platform_intervals=value)
+
+
+async def test_paced_platform_starts_automatic_jobs_at_interval(session_factory):
+    other = "otherplat"
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        for platform, pid in ((PLATFORM, "a1"), (PLATFORM, "a2"), (other, "o")):
+            await ProductRepository(s).upsert(
+                Product(platform=platform, product_id=pid, name="상품", url="https://x")
+            )
+            await repo.create_or_get_active(platform, pid, requested_by="scheduler")
+        await s.commit()
+    intervals = {PLATFORM: 600}
+    async with session_factory() as s:
+        repo = CollectionJobRepository(s)
+        assert (await repo.claim_one("w", platform_intervals=intervals)).product_id == "a1"
+        # 간격이 지나기 전에는 같은 플랫폼의 다음 자동 작업 대신 다른 플랫폼을 꺼낸다.
+        assert (await repo.claim_one("w", platform_intervals=intervals)).platform == other
+        assert await repo.claim_one("w", platform_intervals=intervals) is None
+        # 사람이 요청한 작업은 간격과 무관하게 실행한다.
+        await ProductRepository(s).upsert(
+            Product(platform=PLATFORM, product_id="m", name="상품", url="https://x")
+        )
+        await repo.create_or_get_active(PLATFORM, "m")
+        assert (await repo.claim_one("w", platform_intervals=intervals)).product_id == "m"
+        # 간격이 지나면 다음 자동 작업을 시작한다.
+        await s.execute(
+            update(CollectionJob)
+            .where(CollectionJob.platform == PLATFORM, CollectionJob.status == "running")
+            .values(locked_at=datetime.now(UTC) - timedelta(seconds=601))
+        )
+        assert (await repo.claim_one("w", platform_intervals=intervals)).product_id == "a2"
+        await s.commit()
+
+
+async def test_scheduler_queues_paced_platform_share_and_fills_rest(session_factory):
+    other = "otherplat"
+    for i in range(10):
+        await _add_product(session_factory, f"p{i}", product_age_hours=48, review_age_hours=None)
+    async with session_factory() as s:
+        for i in range(10):
+            await ProductRepository(s).upsert(
+                Product(platform=other, product_id=f"o{i}", name="상품", url="https://x")
+            )
+        await s.execute(
+            update(ProductRow)
+            .where(ProductRow.platform == other)
+            .values(last_collected_at=NOW - timedelta(hours=1), reviews_last_collected_at=NOW)
+        )
+        await s.execute(
+            update(ProductRow)
+            .where(ProductRow.platform == other)
+            .values(reviews_last_collected_at=NOW - timedelta(hours=7))
+        )
+        await s.commit()
+    # 5분 주기에 100초 간격이면 한 주기에 3건만 예약하고 나머지 자리는 다른 플랫폼이 쓴다.
+    settings = SETTINGS.model_copy(
+        update={"collection_platform_intervals": f"{PLATFORM}=100", "schedule_max_pending": 8}
+    )
+    await _schedule(session_factory, settings)
+    jobs = await _jobs(session_factory)
+    assert sum(j.platform == PLATFORM for j in jobs) == 3
+    assert sum(j.platform == other for j in jobs) == 5
+    # 아직 시작하지 않은 몫이 남아 있으면 그만큼 덜 예약한다.
+    await _schedule(session_factory, settings.model_copy(update={"schedule_max_pending": 20}))
+    jobs = await _jobs(session_factory)
+    assert sum(j.platform == PLATFORM for j in jobs) == 3
+
+
 async def test_concurrent_schedulers_respect_pending_limit(session_factory):
     """두 스케줄러가 동시에 돌아도 대기 상한을 넘기지 않는다."""
     settings = SETTINGS.model_copy(update={"schedule_max_pending": 1})

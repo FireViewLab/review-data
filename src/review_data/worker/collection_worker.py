@@ -109,6 +109,7 @@ async def run_once(
         platform_caps=_platform_caps(registry, settings),
         default_cap=settings.max_concurrent_jobs_per_platform,
         block_pause_seconds=settings.schedule_platform_block_seconds,
+        platform_intervals=settings.platform_intervals(),
     )
     if claim is None:
         return False
@@ -209,6 +210,7 @@ async def _claim(
     platform_caps: dict[str, int] | None = None,
     default_cap: int = DEFAULT_PLATFORM_CAP,
     block_pause_seconds: int = 0,
+    platform_intervals: dict[str, int] | None = None,
 ) -> _Claim | None:
     async with session_factory() as session:
         job = await CollectionJobRepository(session).claim_one(
@@ -217,6 +219,7 @@ async def _claim(
             platform_caps=platform_caps,
             default_cap=default_cap,
             block_pause_seconds=block_pause_seconds,
+            platform_intervals=platform_intervals,
         )
         if job is None:
             return None
