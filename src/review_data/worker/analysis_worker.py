@@ -39,7 +39,10 @@ async def run_once(
     async with factory() as session:
         settings = await effective_analysis_settings(session, settings)
         claim = await AnalysisRepository(session).claim(
-            worker_id, lease_seconds, backfill_only=backfill_only
+            worker_id,
+            lease_seconds,
+            backfill_only=backfill_only,
+            reanalysis_share=settings.analysis_reanalysis_share,
         )
         await session.commit()
     if claim is None:
