@@ -25,6 +25,7 @@
 | 김하연 | G마켓 | `collectors/gmarket` | 구현됨 · Cloudflare 차단 시 수집 불가 |
 | 남정현 | 옥션 | `collectors/auction` | 구현됨 · Cloudflare 차단 시 수집 불가 |
 | 남정현 | 무신사 | `collectors/musinsa` | 구현됨 |
+| 남정현 | 쿠팡 | `collectors/coupang` | 검색은 파트너스 API 키 필요 · 상세·리뷰 차단 |
 | 정빈 | 11번가 | `collectors/elevenst` | 구현됨 |
 | 정빈 | 올리브영 | `collectors/oliveyoung` | 구현됨 |
 | 정빈 | 네이버 | `collectors/naver` | 브랜드스토어 상품·리뷰 구현됨 · 검색 미지원 |
@@ -35,6 +36,10 @@
 `NAVER_CLIENT_ID`와 `NAVER_CLIENT_SECRET`이 필요하며, 결과와 순위는 에이블리 자체 검색과
 다릅니다. 상품 상세와 공개 요약 리뷰는 에이블리 페이지에서 수집합니다.
 캡차나 플랫폼의 접근 차단이 확인되면 우회하지 않고 수집 오류로 반환합니다.
+
+쿠팡 검색은 공식 쿠팡 파트너스 Open API를 사용하며 `COUPANG_PARTNERS_ACCESS_KEY`와
+`COUPANG_PARTNERS_SECRET_KEY`가 필요합니다. 결과는 최대 10개이고 평점·리뷰 수는 없습니다.
+상품 상세·리뷰 페이지는 차단돼 수집 오류로 반환합니다([검증 기록](docs/projects/review-data/validation/2026-10-16-coupang-access.md)).
 
 2026-10-07 운영 검증에서 에이블리 검색은 정상 응답했지만 테스트한 상품 상세는
 보안 화면으로 차단됐습니다. 검색 성공을 상품·리뷰 수집 성공으로 보지 않습니다.
