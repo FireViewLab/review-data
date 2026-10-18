@@ -30,7 +30,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    mem_limit: 512m
+    # 512MB에서는 DB(1.4GB)와 분석 대기열이 커진 뒤 3~4시간마다 메모리 한도 초과로 프로세스가
+    # 강제 종료되어 모든 연결이 끊겼다(2026-10-13~18, 33회). 서버 여유 메모리 안에서 올린다.
+    mem_limit: 1g
     restart: unless-stopped
 
   # 배포마다 한 번 돌고 끝난다. 스키마가 앞서 있어야 API·워커가 새 코드로 뜰 수 있다.
