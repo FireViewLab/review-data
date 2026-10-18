@@ -242,6 +242,52 @@ async def test_visible_bare_review_tab_preferred_over_related_review_count():
     labels[0].locator.return_value.first = counted
     labels[1].locator.return_value.first = bare
     page.get_by_text.side_effect = labels
+    listed = AsyncMock()
+    listed.count.return_value = 0
+    page.locator.return_value.filter.return_value.locator.return_value.first = listed
     await NaverCollector()._open_review_tab(page)
     bare.click.assert_awaited_once()
     counted.click.assert_not_awaited()
+
+
+async def test_review_tab_button_in_tab_list_preferred_over_hidden_label():
+    # 다른 영역의 화면 낭독용 '리뷰' 글자보다 탭 목록의 리뷰 버튼을 누른다.
+    from unittest.mock import AsyncMock, MagicMock
+
+    from review_data.collectors.naver.collector import REVIEW_TAB_SELECTOR, REVIEW_TAB_TEXT
+
+    page = MagicMock()
+    counted, bare, listed = AsyncMock(), AsyncMock(), AsyncMock()
+    bare.count.return_value = 1
+    listed.count.return_value = 1
+    labels = [MagicMock(), MagicMock()]
+    labels[0].locator.return_value.first = counted
+    labels[1].locator.return_value.first = bare
+    page.get_by_text.side_effect = labels
+    page.locator.return_value.filter.return_value.locator.return_value.first = listed
+    await NaverCollector()._open_review_tab(page)
+    page.locator.assert_called_with(REVIEW_TAB_SELECTOR)
+    page.locator.return_value.filter.assert_called_with(has_text=REVIEW_TAB_TEXT)
+    listed.click.assert_awaited_once()
+    bare.click.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    [(429, "AccessBlockedError"), (403, "AccessBlockedError"), (500, "ParseError")],
+)
+async def test_review_request_failure_status_is_reported(monkeypatch, status, error):
+    from review_data.collectors.naver import collector as module
+    from review_data.core import exceptions
+
+    capture = module._PageCapture(product={"reviewAmount": {"totalReviewCount": 3}})
+    capture.review_error_status = status
+    naver = NaverCollector()
+
+    async def visit(product_id, *, with_related=False):
+        return capture
+
+    monkeypatch.setattr(naver, "_visit", visit)
+    with pytest.raises(getattr(exceptions, error)) as raised:
+        await naver.get_reviews(PRODUCT_ID, 10)
+    assert f"HTTP {status}" in str(raised.value)
