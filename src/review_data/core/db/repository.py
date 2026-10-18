@@ -133,6 +133,11 @@ class ProductRepository:
             # 않으면 몇 번을 다시 수집해도 updated_at 이 최초 insert 시각에 머문다.
             "updated_at": datetime.now(UTC),
         }
+        # 소개가 없는 검색·재수집 결과로 기존 상세 소개를 지우지 않는다.
+        if product.description_text:
+            values["description_text"] = product.description_text
+        if product.description_images:
+            values["description_images"] = product.description_images
         stmt = pg_insert(ProductRow).values(
             platform=product.platform, product_id=product.product_id, **values
         )

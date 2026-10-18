@@ -74,6 +74,10 @@ class ProductOut(BaseModel):
     seller: str | None = None
     price: int | None = Field(None, description="원 단위")
     thumbnail_url: str | None = None
+    description_text: str | None = Field(None, description="상품 소개 텍스트 (최대 20,000자)")
+    description_images: list[str] = Field(
+        default_factory=list, description="소개 이미지 주소 (최대 100개)"
+    )
     category: str | None = None
     review_count: int | None = None
     rating: float | None = Field(None, description="5점 만점 환산")
@@ -161,6 +165,8 @@ _PRODUCT_EXAMPLE = {
     "seller": None,
     "price": 12900,
     "thumbnail_url": "https://img.example.com/thumb.jpg",
+    "description_text": "상품의 특징과 사용 방법을 소개합니다.",
+    "description_images": ["https://img.example.com/description.jpg"],
     "category": "간식",
     "review_count": 128,
     "rating": 4.8,

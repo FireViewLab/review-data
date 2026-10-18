@@ -43,6 +43,8 @@ class ProductRow(Base):
     seller: Mapped[str | None] = mapped_column(Text)
     price: Mapped[int | None]
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    description_text: Mapped[str | None] = mapped_column(Text)
+    description_images: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
     category: Mapped[str | None] = mapped_column(Text)
     review_count: Mapped[int | None]
     rating: Mapped[float | None] = mapped_column(Numeric(3, 2))

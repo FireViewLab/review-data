@@ -13,6 +13,7 @@ from review_data.collectors.musinsa.collector import (
     _parse_search_items,
 )
 from review_data.core.exceptions import ParseError, ProductNotFoundError
+from review_data.core.product_description import parse_description
 
 FIXTURES = Path(__file__).parent / "fixtures" / "musinsa"
 
@@ -108,7 +109,7 @@ def _product_data(product_id="6469654"):
 
 
 async def _get_product(data, product_id="6469654"):
-    html = '<script id="__NEXT_DATA__">' + json.dumps(data) + "</script>"
+    html = '<script id="__NEXT_DATA__">' + json.dumps(data).replace("<", "\\u003c") + "</script>"
     collector = MusinsaCollector()
     collector._client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html))
@@ -205,3 +206,51 @@ async def test_missing_product_name_raises_parse_error(name):
 async def test_invalid_next_data_root_raises_parse_error(data):
     with pytest.raises(ParseError, match="__NEXT_DATA__"):
         await _get_product(data)
+
+
+async def test_product_description_images_from_saved_page():
+    product = await _get_product(_product_data())
+
+    assert product.description_text is None
+    assert product.description_images == [
+        f"https://worksby00.cafe24.com/SEOULAPE/{path}.jpg"
+        for path in [
+            "TOP/SA26SS03", "MODEL/SA26SS03", "INFLU/SA26SS03",
+            "INFO/SA26SS0301", "DETAIL/SA26SS0301",
+        ]
+    ]
+
+
+async def test_product_description_normalizes_text_and_image_urls():
+    data = _product_data()
+    goods = data["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["data"]
+    goods["goodsContents"] = (
+        "<h2>상품 소개</h2><p> 부드러운\n 소재&nbsp;입니다. </p>"
+        "<script>숨길 코드</script><style>숨길 스타일</style>"
+        '<img src="//images.example.com/a.jpg"><img src="http://images.example.com/a.jpg">'
+        '<img data-src="/detail/b.jpg" src="data:image/png;base64,x">'
+        '<img src="javascript:alert(1)"><img src="ftp://example.com/a.jpg">'
+    )
+    product = await _get_product(data)
+
+    assert product.description_text == "상품 소개 부드러운 소재 입니다."
+    assert product.description_images == [
+        "https://images.example.com/a.jpg", "https://www.musinsa.com/detail/b.jpg",
+    ]
+
+
+def test_description_limits_and_extra_images():
+    text, images = parse_description(
+        "<p>" + "가" * 20_001 + '</p><img src="//example.com/0.jpg">',
+        "https://example.com/products/1",
+        [f"http://example.com/{i}.jpg" for i in range(110)],
+    )
+    assert text == "가" * 20_000
+    assert len(images) == 100
+    assert images[0] == "https://example.com/0.jpg"
+    assert images[-1] == "https://example.com/99.jpg"
+
+
+@pytest.mark.parametrize("html", [None, "", " \n ", "<p></p>"])
+def test_empty_description(html):
+    assert parse_description(html, "https://example.com/products/1") == (None, [])
