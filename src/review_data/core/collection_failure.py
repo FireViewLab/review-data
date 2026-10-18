@@ -7,6 +7,7 @@ from review_data.core.exceptions import (
     MissingCredentialError,
     NotSupportedError,
     ParseError,
+    ProductNotFoundError,
 )
 
 PRIORITY = {
@@ -34,6 +35,8 @@ def failure_kind(error: Exception | str) -> str:
         return "unsupported"
     if isinstance(error, AccessBlockedError):
         return "blocked"
+    if isinstance(error, ProductNotFoundError):
+        return "not_found"
     if isinstance(error, TimeoutError):
         return "timeout"
     if isinstance(error, httpx.HTTPStatusError):
