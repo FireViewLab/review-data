@@ -28,3 +28,7 @@ class ParseError(CollectorError):
 
 class AccessBlockedError(ParseError):
     """정상 접근에서 차단·로그인·봇 확인이 관측되어 수집을 중단했을 때."""
+
+
+class ProductNotFoundError(ParseError):
+    """상품이 없거나 유효하지 않은 상품 페이지임이 확인되었을 때."""

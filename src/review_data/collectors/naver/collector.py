@@ -53,6 +53,8 @@ BLOCKED_STATUSES = {418, 429, 490}
 BLOCK_MARKERS = ("captcha", "보안 확인", "접속이 일시적으로 제한")
 RESPONSE_TIMEOUT_SECONDS = 15.0
 REVIEW_TAB_TIMEOUT_MS = 10_000
+# 상품 상세의 탭 목록(상세정보·리뷰·Q&A 등) 버튼.
+REVIEW_TAB_SELECTOR = "[role=presentation] > button, [role=tab]"
 
 
 def parse_product_id(product_id: str) -> tuple[str, str]:
@@ -218,6 +220,8 @@ class _PageCapture:
     related: list[Any] = field(default_factory=list)
     product_ready: asyncio.Event = field(default_factory=asyncio.Event)
     reviews_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    # 리뷰 목록 요청이 실패했을 때의 HTTP 상태. 차단과 화면 구조 변경을 구분하는 데 쓴다.
+    review_error_status: int | None = None
 
 
 class NaverCollector(BrowserCollector):
@@ -251,7 +255,13 @@ class NaverCollector(BrowserCollector):
             total = ((capture.product or {}).get("reviewAmount") or {}).get("totalReviewCount")
             if total == 0:
                 return []
-            raise ParseError(f"[naver] 리뷰 목록을 받지 못했습니다: {product_id}")
+            status = capture.review_error_status
+            if status in (403, 429):
+                raise AccessBlockedError(
+                    f"[naver] 리뷰 목록 요청이 차단됐습니다 (HTTP {status}): {product_id}"
+                )
+            suffix = f" (HTTP {status})" if status else ""
+            raise ParseError(f"[naver] 리뷰 목록을 받지 못했습니다{suffix}: {product_id}")
         return parse_reviews(capture.reviews, product_id, limit, grouped=capture.grouped_reviews)
 
     async def related_products(self, product_id: str, limit: int = 20) -> list[str]:
@@ -286,6 +296,8 @@ class NaverCollector(BrowserCollector):
 
         async def on_response(response: Response) -> None:
             if not response.ok:
+                if review_response_path(response.url) and capture.review_error_status is None:
+                    capture.review_error_status = response.status
                 return
             if capture.product is None and product_path.search(response.url):
                 capture.product = await response.json()
@@ -348,8 +360,18 @@ class NaverCollector(BrowserCollector):
             await tab.wait_for(state="visible", timeout=REVIEW_TAB_TIMEOUT_MS)
         except PlaywrightTimeoutError:
             return  # 리뷰가 없는 상품은 탭에 개수가 붙지 않는다.
+        # 2026-10-16 이후 페이지에는 다른 영역에도 화면 낭독용 '리뷰' 글자가 있어, 글자로만
+        # 고르면 클릭이 막히고 리뷰 목록 요청이 나가지 않는다. 탭 목록의 버튼을 먼저 고른다.
+        listed = (
+            page.locator(REVIEW_TAB_SELECTOR)
+            .filter(has_text=REVIEW_TAB_TEXT)
+            .locator("visible=true")
+            .first
+        )
         bare = page.get_by_text("리뷰", exact=True).locator("visible=true").first
-        if await bare.count():
+        if await listed.count():
+            tab = listed
+        elif await bare.count():
             tab = bare
         await tab.scroll_into_view_if_needed()
         # 탭 위에 고정 헤더가 겹쳐 일반 클릭이 막힌다. 사람이 누르는 것과 같은 클릭 이벤트다.

@@ -154,6 +154,8 @@ class Settings(BaseSettings):
     elevenst_api_key: str | None = None
     naver_client_id: str | None = None
     naver_client_secret: str | None = None
+    coupang_partners_access_key: str | None = None
+    coupang_partners_secret_key: str | None = None
 
     def platform_intervals(self) -> dict[str, int]:
         """형식은 생성 시 검증하므로 여기서는 실패하지 않는다."""

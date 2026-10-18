@@ -8,7 +8,12 @@ import pytest
 from review_data.core.collection_failure import failure_kind, retry_delay
 from review_data.core.db.models import CollectionJob, ProductRow
 from review_data.core.db.repository import CollectionJobRepository
-from review_data.core.exceptions import AccessBlockedError, MissingCredentialError, ParseError
+from review_data.core.exceptions import (
+    AccessBlockedError,
+    MissingCredentialError,
+    ParseError,
+    ProductNotFoundError,
+)
 from review_data.core.service.operations import operational_status
 
 
@@ -25,6 +30,7 @@ def _status_error(status: int) -> httpx.HTTPStatusError:
         (AccessBlockedError("접근 불가"), "blocked"),
         (MissingCredentialError("키 미설정"), "credentials"),
         (ParseError("리뷰 구조 변경"), "parse"),
+        (ProductNotFoundError("유효하지 않은 상품"), "not_found"),
         (TimeoutError(), "timeout"),
         ("product: HTTP 404", "not_found"),
         ("review 저장 실패", "storage"),

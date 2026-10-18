@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from review_data.core.base import BaseCollector
-from review_data.core.exceptions import ParseError
+from review_data.core.exceptions import ParseError, ProductNotFoundError
 from review_data.core.models import Product, Review
 
 IMAGE_BASE = "https://image.msscdn.net"
@@ -31,13 +31,26 @@ def _extract_next_data(html: str) -> dict[str, Any]:
     match = _NEXT_DATA_RE.search(html)
     if match is None:
         raise ParseError("musinsa: __NEXT_DATA__ 를 찾을 수 없습니다. (페이지 구조 변경 가능성)")
-    return json.loads(match.group(1))
+    try:
+        data = json.loads(match.group(1))
+    except ValueError as exc:
+        raise ParseError("musinsa: __NEXT_DATA__ JSON 형식이 올바르지 않습니다.") from exc
+    return _object(data, "__NEXT_DATA__")
+
+
+def _object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ParseError(f"musinsa: {field} 데이터가 없거나 형식이 올바르지 않습니다.")
+    return value
 
 
 def _find_query_data(queries: list[dict[str, Any]], predicate) -> Any | None:
     for query in queries:
-        if predicate(query.get("queryKey", [])):
-            return query.get("state", {}).get("data")
+        if not isinstance(query, dict):
+            continue
+        key = query.get("queryKey")
+        if isinstance(key, list) and predicate(key):
+            return _object(query.get("state") or {}, "query state").get("data")
     return None
 
 
@@ -140,18 +153,39 @@ class MusinsaCollector(BaseCollector):
         response.raise_for_status()
 
         next_data = _extract_next_data(response.text)
-        queries = next_data["props"]["pageProps"]["dehydratedState"]["queries"]
+        props = _object(_object(next_data.get("props"), "props").get("pageProps"), "pageProps")
+        meta = _object(props.get("meta") or {}, "상품 meta")
+        status = _object(meta.get("meta") or {}, "상품 meta 상태")
+        if (
+            props.get("hasDetail") is False
+            and meta.get("data") is None
+            and status.get("result") == "FAIL"
+            and status.get("errorCode") == "DISPLAY_000_0006"
+        ):
+            raise ProductNotFoundError(
+                f"musinsa: {product_id} 유효하지 않은 상품입니다 (DISPLAY_000_0006)."
+            )
+
+        state = _object(props.get("dehydratedState") or {}, "dehydratedState")
+        queries = state.get("queries")
+        if queries is None:
+            queries = []
+        if not isinstance(queries, list):
+            raise ParseError("musinsa: queries 형식이 올바르지 않습니다.")
         detail = _find_query_data(
             queries,
-            lambda key: len(key) >= 2 and key[0] == "Detail" and key[1] == int(product_id),
+            lambda key: len(key) >= 2 and key[0] == "Detail" and str(key[1]) == product_id,
         )
         if detail is None:
-            raise ParseError(f"musinsa: {product_id} 상품 정보를 찾을 수 없습니다.")
+            # 쿼리가 없는 페이지도 meta에 실제 상품 데이터가 있으면 읽는다.
+            detail = meta
 
-        goods = detail["data"]
-        price_info = goods.get("goodsPrice") or {}
-        review_info = goods.get("goodsReview") or {}
-        brand_info = goods.get("brandInfo") or {}
+        goods = _object(_object(detail, "상품 응답").get("data"), "상품 정보")
+        if not isinstance(goods.get("goodsNm"), str) or not goods["goodsNm"].strip():
+            raise ParseError(f"musinsa: {product_id} 상품명을 찾을 수 없습니다.")
+        price_info = _object(goods.get("goodsPrice") or {}, "상품 가격")
+        review_info = _object(goods.get("goodsReview") or {}, "상품 평점")
+        brand_info = _object(goods.get("brandInfo") or {}, "상품 브랜드")
 
         return Product(
             platform=self.platform,
