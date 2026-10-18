@@ -1,6 +1,10 @@
 """무신사 collector 단위 테스트(네트워크 없이 응답 변환만 검증)."""
 
+import json
+from pathlib import Path
+
 import httpx
+import pytest
 
 from review_data.collectors.musinsa.collector import (
     REVIEW_PAGE_SIZE_MAX,
@@ -8,6 +12,9 @@ from review_data.collectors.musinsa.collector import (
     _parse_review,
     _parse_search_items,
 )
+from review_data.core.exceptions import ParseError, ProductNotFoundError
+
+FIXTURES = Path(__file__).parent / "fixtures" / "musinsa"
 
 PRODUCT_ITEM = {
     "goodsNo": 7217502,
@@ -93,3 +100,108 @@ async def test_reviews_request_respects_page_size_limit_and_paginates():
 
 async def _noop() -> None:
     return None
+
+
+def _product_data(product_id="6469654"):
+    html = (FIXTURES / f"{product_id}.html").read_text()
+    return json.loads(html.split(">", 1)[1].rsplit("</script>", 1)[0])
+
+
+async def _get_product(data, product_id="6469654"):
+    html = '<script id="__NEXT_DATA__">' + json.dumps(data) + "</script>"
+    collector = MusinsaCollector()
+    collector._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    )
+    try:
+        return await collector.get_product(product_id)
+    finally:
+        await collector._client.aclose()
+
+
+async def test_invalid_product_page_raises_not_found():
+    with pytest.raises(ProductNotFoundError, match="DISPLAY_000_0006"):
+        await _get_product(_product_data("3534051"), "3534051")
+
+
+async def test_normal_product_page_preserves_fields():
+    product = await _get_product(_product_data())
+
+    assert (product.product_id, product.name) == ("6469654", "로우 무드 스커트 팬츠 (블랙)")
+    assert (product.brand, product.price) == ("서울어패럴", 46800)
+    assert (product.review_count, product.rating) == (2, 5)
+    assert product.category == "Clothing > 스커트 > 미니스커트"
+    assert product.thumbnail_url.startswith("https://image.msscdn.net/images/goods_img/")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("props",),
+        ("props", "pageProps"),
+        ("props", "pageProps", "dehydratedState"),
+        ("props", "pageProps", "dehydratedState", "queries"),
+        ("props", "pageProps", "dehydratedState", "queries", 0),
+        ("props", "pageProps", "dehydratedState", "queries", 0, "queryKey"),
+        ("props", "pageProps", "dehydratedState", "queries", 0, "state"),
+        ("props", "pageProps", "dehydratedState", "queries", 0, "state", "data"),
+        ("props", "pageProps", "dehydratedState", "queries", 0, "state", "data", "data"),
+    ],
+)
+async def test_null_product_paths_raise_parse_error(path):
+    data = _product_data()
+    parent = data
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = None
+
+    with pytest.raises(ParseError) as error:
+        await _get_product(data)
+    assert not isinstance(error.value, ProductNotFoundError)
+
+
+async def test_unknown_error_page_is_not_classified_as_missing_product():
+    data = _product_data("3534051")
+    data["props"]["pageProps"]["meta"]["meta"]["errorCode"] = "UNKNOWN"
+
+    with pytest.raises(ParseError) as error:
+        await _get_product(data, "3534051")
+    assert not isinstance(error.value, ProductNotFoundError)
+
+
+async def test_meta_product_data_without_queries_is_readable():
+    data = _product_data()
+    props = data["props"]["pageProps"]
+    props["meta"] = props["dehydratedState"]["queries"][0]["state"]["data"]
+    props["dehydratedState"] = None
+
+    assert (await _get_product(data)).price == 46800
+
+
+async def test_optional_product_fields_may_be_null():
+    data = _product_data()
+    props = data["props"]["pageProps"]
+    props["meta"] = None
+    goods = props["dehydratedState"]["queries"][0]["state"]["data"]["data"]
+    for key in ("goodsPrice", "goodsReview", "brandInfo"):
+        goods[key] = None
+
+    product = await _get_product(data)
+    assert (product.price, product.brand, product.review_count, product.rating) == (None,) * 4
+
+
+@pytest.mark.parametrize("name", [None, "", " "])
+async def test_missing_product_name_raises_parse_error(name):
+    data = _product_data()
+    data["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["data"][
+        "goodsNm"
+    ] = name
+
+    with pytest.raises(ParseError, match="상품명"):
+        await _get_product(data)
+
+
+@pytest.mark.parametrize("data", [None, []])
+async def test_invalid_next_data_root_raises_parse_error(data):
+    with pytest.raises(ParseError, match="__NEXT_DATA__"):
+        await _get_product(data)
