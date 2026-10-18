@@ -1,4 +1,7 @@
 from datetime import datetime
+from pathlib import Path
+
+import httpx
 
 from review_data.collectors.kurly.collector import KurlyCollector
 
@@ -100,3 +103,47 @@ async def test_zero_review_limit_returns_empty_list() -> None:
     )
 
     assert reviews == []
+
+
+async def test_product_description_from_saved_page() -> None:
+    html = (Path(__file__).parent / "fixtures" / "kurly" / "5139272.html").read_text()
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, text=html)
+
+    collector = KurlyCollector()
+    collector._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        product = await collector.get_product("5139272")
+    finally:
+        await collector._client.aclose()
+
+    assert "무항생제 인증 우유" in product.description_text
+    assert "0~10ºC에서 냉장 보관하세요." in product.description_text
+    assert "<" not in product.description_text
+    assert len(product.description_images) == 4
+    assert product.description_images[-1].endswith("gv30000469878_1.jpg")
+    assert all(url.startswith("https://") for url in product.description_images)
+    assert len(requests) == 1
+
+
+async def test_product_without_description_defaults_to_empty() -> None:
+    collector = KurlyCollector()
+    collector._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                text='<script id="__NEXT_DATA__">'
+                '{"props":{"pageProps":{"product":{"no":1,"name":"상품","productDetail":null}}}}'
+                "</script>",
+            )
+        )
+    )
+    try:
+        product = await collector.get_product("1")
+    finally:
+        await collector._client.aclose()
+    assert product.description_text is None
+    assert product.description_images == []

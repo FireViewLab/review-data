@@ -16,6 +16,7 @@ from typing import Any
 from review_data.core.base import BaseCollector
 from review_data.core.exceptions import ParseError, ProductNotFoundError
 from review_data.core.models import Product, Review
+from review_data.core.product_description import parse_description
 
 IMAGE_BASE = "https://image.msscdn.net"
 SEARCH_URL = "https://www.musinsa.com/search/goods"
@@ -186,6 +187,7 @@ class MusinsaCollector(BaseCollector):
         price_info = _object(goods.get("goodsPrice") or {}, "상품 가격")
         review_info = _object(goods.get("goodsReview") or {}, "상품 평점")
         brand_info = _object(goods.get("brandInfo") or {}, "상품 브랜드")
+        description_text, description_images = parse_description(goods.get("goodsContents"), url)
 
         return Product(
             platform=self.platform,
@@ -195,6 +197,8 @@ class MusinsaCollector(BaseCollector):
             brand=brand_info.get("brandName") or goods.get("brand"),
             price=price_info.get("salePrice"),
             thumbnail_url=_image_url(goods.get("thumbnailImageUrl")),
+            description_text=description_text,
+            description_images=description_images,
             category=goods.get("baseCategoryFullPath"),
             review_count=review_info.get("totalCount"),
             rating=review_info.get("satisfactionScore"),

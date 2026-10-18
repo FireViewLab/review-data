@@ -34,6 +34,8 @@ class Product(BaseModel):
     # ── 부가 정보 ──────────────────────────
     price: int | None = None
     thumbnail_url: str | None = None
+    description_text: str | None = None
+    description_images: list[str] = Field(default_factory=list)
     category: str | None = None
     review_count: int | None = None
     rating: float | None = Field(default=None, description="평균 평점 (5점 만점 환산)")

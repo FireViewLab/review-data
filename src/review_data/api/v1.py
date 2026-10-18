@@ -44,7 +44,10 @@ async def get_catalog(
         raise _api_error(400, "INVALID_CURSOR", str(exc)) from exc
     return {
         "items": [
-            {"product": _serialize_product(product), "analysis": analysis}
+            {
+                "product": _serialize_product(product, include_description=False),
+                "analysis": analysis,
+            }
             for product, analysis in items
         ],
         "next_cursor": next_cursor,
@@ -62,8 +65,8 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _serialize_product(row: ProductRow) -> dict:
-    return {
+def _serialize_product(row: ProductRow, *, include_description: bool = True) -> dict:
+    body = {
         "platform": row.platform,
         "product_id": row.product_id,
         "name": row.name,
@@ -78,6 +81,10 @@ def _serialize_product(row: ProductRow) -> dict:
         "rating": float(row.rating) if row.rating is not None else None,
         "last_collected_at": _iso(row.last_collected_at),
     }
+    if include_description:
+        body["description_text"] = row.description_text
+        body["description_images"] = list(row.description_images or [])
+    return body
 
 
 def _serialize_review(row: ReviewRow) -> dict:

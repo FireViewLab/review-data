@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from review_data.core.base import BaseCollector
 from review_data.core.exceptions import ParseError
 from review_data.core.models import Product, Review
+from review_data.core.product_description import parse_description
 
 
 class KurlyCollector(BaseCollector):
@@ -468,6 +469,19 @@ class KurlyCollector(BaseCollector):
         if not isinstance(thumbnail_url, str):
             thumbnail_url = None
 
+        detail = product.get("productDetail")
+        detail = detail if isinstance(detail, dict) else {}
+        content = detail.get("contentDescription")
+        images = detail.get("legacyPiImages")
+        images = images if isinstance(images, list) else []
+        if isinstance(content, dict) and isinstance(content.get("productImages"), list):
+            images = [*images, *content["productImages"]]
+        while isinstance(content, dict):
+            content = content.get("description")
+        description_text, description_images = parse_description(
+            content, f"{self._BASE_URL}/goods/{original_product_id}", images
+        )
+
         return Product(
             platform=self.platform,
             product_id=str(original_product_id),
@@ -478,6 +492,8 @@ class KurlyCollector(BaseCollector):
             seller=seller,
             price=self._extract_price(product),
             thumbnail_url=thumbnail_url,
+            description_text=description_text,
+            description_images=description_images,
             category=self._extract_category(product),
             review_count=review_count,
             rating=None,
