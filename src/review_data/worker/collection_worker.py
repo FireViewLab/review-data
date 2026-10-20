@@ -28,6 +28,7 @@ from review_data.core.browser import BrowserCollector
 from review_data.core.collection_failure import dominant_failure, failure_kind
 from review_data.core.db.analysis_repository import AnalysisRepository
 from review_data.core.db.models import CollectionJob
+from review_data.core.db.pipeline_control import collection_stopped
 from review_data.core.db.repository import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_PLATFORM_CAP,
@@ -99,6 +100,10 @@ async def run_once(
 ) -> bool:
     """job 하나를 claim 해서 처리한다. 처리할 job이 없으면 False를 반환한다."""
     settings = settings or get_settings()
+    # 운영자가 수집을 멈추면 사람이 요청한 작업까지 꺼내지 않는다. 대기열은 그대로 남는다.
+    async with session_factory() as session:
+        if await collection_stopped(session):
+            return False
     await _fail_exhausted(session_factory)
 
     registry, _ = discover()

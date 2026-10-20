@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from review_data.core.analysis_stream import AnalysisStreamClient, AnalysisStreamError
 from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.analysis_repository import AnalysisRepository
+from review_data.core.db.pipeline_control import analysis_stopped
 from review_data.core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ async def run_once(
     if not settings.ai_analysis_enabled:
         return False
     async with factory() as session:
+        # AI 서버 장애 때 운영자가 멈추면 작업을 꺼내지 않는다. 대기열은 그대로 남는다.
+        if await analysis_stopped(session):
+            return False
         settings = await effective_analysis_settings(session, settings)
         claim = await AnalysisRepository(session).claim(
             worker_id,

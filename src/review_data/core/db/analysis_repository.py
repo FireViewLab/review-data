@@ -5,7 +5,7 @@ import json
 import random
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -56,6 +56,73 @@ FAILURE_REASONS = {
     "exhausted": "분석 최대 시도 횟수 초과",
 }
 FAILURE_KINDS = {reason: kind for kind, reason in FAILURE_REASONS.items()}
+
+# AI 서버 쪽 장애로 볼 수 있는 실패. 응답 검증·저장 실패는 다시 보내도 같은 결과라 뺀다.
+RECOVERABLE_KINDS = ("http", "transport", "timeout", "conflict", "ai_error", "exhausted")
+
+# 상품별 최신 작업이 기간 안의 실패이고 지금 목표 버전으로 요청했던 것만 다시 보낸다. 그 뒤에
+# 리뷰가 바뀌었으면 수집이 이미 새 작업을 만들었으므로 최신 작업이 아니게 된다.
+_RECOVERY_CANDIDATES = """
+WITH latest AS (
+    SELECT DISTINCT ON (platform, product_id) id FROM analysis_jobs
+    ORDER BY platform, product_id, id DESC
+)
+SELECT j.id, j.platform, j.product_id, j.last_error,
+    (j.last_error = ANY(:labels)
+        AND j.input_payload->>'model_version' IS NOT DISTINCT FROM :model
+        AND j.input_payload->>'policy_version' IS NOT DISTINCT FROM :policy) AS recoverable
+FROM analysis_jobs j JOIN latest USING (id)
+WHERE j.status = 'failed' AND j.completed_at > :since
+"""
+
+
+def _recovery_params(since: datetime, settings: Settings) -> dict:
+    return {
+        "since": since,
+        "labels": [FAILURE_REASONS[kind] for kind in RECOVERABLE_KINDS],
+        "model": settings.ai_model_version,
+        "policy": settings.ai_policy_version,
+    }
+
+
+async def failure_summary(session: AsyncSession, since: datetime, settings: Settings) -> dict:
+    """기간 안에 끝난 실패 분석 작업(상품별 최신)을 원인별로 센다."""
+    rows = (
+        await session.execute(text(_RECOVERY_CANDIDATES), _recovery_params(since, settings))
+    ).all()
+    by_kind: dict[str, int] = {}
+    for row in rows:
+        kind = FAILURE_KINDS.get(row.last_error, "legacy_unknown")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    return {
+        "total": len(rows),
+        "recoverable": sum(1 for row in rows if row.recoverable),
+        "by_reason": [
+            {"kind": kind, "count": count}
+            for kind, count in sorted(by_kind.items(), key=lambda item: -item[1])
+        ],
+    }
+
+
+async def recover_failures(session: AsyncSession, since: datetime, settings: Settings) -> int:
+    """AI 쪽 원인으로 실패한 작업을 같은 입력·새 작업 ID로 다시 예약한다."""
+    result = await session.execute(
+        text(f"""
+        WITH candidates AS ({_RECOVERY_CANDIDATES})
+        INSERT INTO analysis_jobs (platform, product_id, status, input_payload, input_hash,
+            input_review_count, trigger_collection_job_id, available_at, attempt_count,
+            max_attempts)
+        SELECT j.platform, j.product_id, 'queued', j.input_payload, j.input_hash,
+            j.input_review_count, j.trigger_collection_job_id, now(), 0, j.max_attempts
+        FROM analysis_jobs j JOIN candidates c ON c.id = j.id
+        WHERE c.recoverable AND NOT EXISTS (
+            SELECT 1 FROM analysis_jobs a WHERE a.platform = j.platform
+                AND a.product_id = j.product_id AND a.status IN ('queued', 'running'))
+        RETURNING id
+        """),
+        _recovery_params(since, settings),
+    )
+    return len(result.all())
 
 
 def has_prior_result(job=AnalysisJob):

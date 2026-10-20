@@ -7,6 +7,7 @@
 
 import asyncio
 import contextlib
+import logging
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import APIKeyHeader
+from sqlalchemy.exc import SQLAlchemyError
 
 from review_data.api import docs, status, v1
 from review_data.api.sse import (
@@ -37,6 +39,7 @@ from review_data.api.sse import (
 )
 from review_data.core.base import BaseCollector
 from review_data.core.db.base import create_engine, create_session_factory
+from review_data.core.db.pipeline_control import collection_stopped
 from review_data.core.discovery import LoadFailure, discover
 from review_data.core.exceptions import CollectorError, NotSupportedError
 from review_data.core.models import Review
@@ -221,6 +224,24 @@ def _registry() -> tuple[dict[str, type[BaseCollector]], tuple[LoadFailure, ...]
     return registry, tuple(failures)
 
 
+logger = logging.getLogger(__name__)
+
+
+async def _ensure_collection_running(request: Request) -> None:
+    """운영자가 수집을 멈춘 동안에는 쇼핑몰에 직접 요청하는 API도 거절한다."""
+    try:
+        async with request.app.state.session_factory() as session:
+            stopped = await collection_stopped(session)
+    except SQLAlchemyError:
+        # 상태를 읽지 못하면 막지 않는다. 중지는 운영 편의 기능이라 DB 장애로 API까지 멈추지 않는다.
+        logger.warning("운영 제어 상태를 읽지 못해 수집 중지 여부를 확인하지 못했습니다.")
+        return
+    if stopped:
+        raise HTTPException(
+            status_code=503, detail="수집이 중지되어 있습니다. /status 에서 재개해 주세요."
+        )
+
+
 def _get_collector_cls(platform: str) -> type[BaseCollector]:
     registry, _ = _registry()
     cls = registry.get(platform)
@@ -269,6 +290,7 @@ async def search(
     keyword: Annotated[str, Query(min_length=1, max_length=100)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
+    await _ensure_collection_running(request)
     collector_cls = _get_collector_cls(platform)
     try:
         async with collector_cls() as collector:
@@ -289,7 +311,8 @@ async def search(
     "이 경로는 저장 없이 바로 긁어온다.",
     responses=docs.AUTH_ERROR,
 )
-async def product(platform: str, product_id: str):
+async def product(request: Request, platform: str, product_id: str):
+    await _ensure_collection_running(request)
     collector_cls = _get_collector_cls(platform)
     try:
         async with collector_cls() as collector:
@@ -305,7 +328,8 @@ async def product(platform: str, product_id: str):
     description="저장 없이 바로 긁어온다.",
     responses=docs.AUTH_ERROR,
 )
-async def reviews(platform: str, product_id: str, limit: int = 50):
+async def reviews(request: Request, platform: str, product_id: str, limit: int = 50):
+    await _ensure_collection_running(request)
     collector_cls = _get_collector_cls(platform)
     try:
         async with collector_cls() as collector:
@@ -324,6 +348,7 @@ async def reviews(platform: str, product_id: str, limit: int = 50):
     responses={200: {"content": {"text/event-stream": {}}}, **docs.AUTH_ERROR},
 )
 async def reviews_stream(
+    request: Request,
     platform: str,
     product_id: str,
     limit: int = 50,
@@ -341,6 +366,7 @@ async def reviews_stream(
       이벤트로 알리고 닫습니다.
     """
 
+    await _ensure_collection_running(request)
     collector_cls = _get_collector_cls(platform)
     try:
         # 인증 정보 검사는 생성자에서 일어납니다. 스트림을 열기 전에 걸러 둡니다.

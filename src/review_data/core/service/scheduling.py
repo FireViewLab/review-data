@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from review_data.core.db.pipeline_control import collection_stopped
 from review_data.core.db.repository import CollectionJobRepository
 from review_data.core.settings import Settings, get_settings
 
@@ -56,7 +57,9 @@ class SchedulingService:
         pending -= sum(max(0, waiting.get(p, 0) - share) for p, share in paced.items())
         from review_data.core.service.analysis_refresh import collection_paused
 
-        if await collection_paused(self.session, self.settings):
+        if await collection_paused(self.session, self.settings) or await collection_stopped(
+            self.session
+        ):
             return ScheduleResult(pending_before=pending, created=0)
         room = self.settings.schedule_max_pending - pending
         if room <= 0:
