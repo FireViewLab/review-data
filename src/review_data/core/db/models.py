@@ -19,6 +19,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     PrimaryKeyConstraint,
+    SmallInteger,
     Text,
     UniqueConstraint,
     text,
@@ -335,3 +336,16 @@ class AnalysisRefreshControl(Base):
     policy_version: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PipelineControl(Base):
+    """운영자가 /status 에서 바꾸는 수집·AI 분석 요청 중지 상태. 한 행만 쓴다."""
+
+    __tablename__ = "pipeline_control"
+    __table_args__ = (CheckConstraint("id = 1", name="pipeline_control_single_row"),)
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, server_default=text("1"))
+    collection_paused: Mapped[bool] = mapped_column(server_default=text("false"))
+    analysis_paused: Mapped[bool] = mapped_column(server_default=text("false"))
+    collection_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    analysis_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
