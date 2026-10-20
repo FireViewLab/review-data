@@ -525,6 +525,28 @@
         padding: 7px 0;
         font-size: 12px;
       }
+      #pipeline-panel {
+        margin-bottom: 20px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      #pipeline-panel .stat-row {
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+      .pipeline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      #pipeline-panel select {
+        max-width: 100%;
+      }
+      #pipeline-warning {
+        border-left: 3px solid var(--orange);
+      }
       .timeline-note {
         font-size: 10px;
         color: var(--muted);
@@ -635,6 +657,46 @@
       </header>
       <div id="error-banner" class="notice hidden" role="alert"></div>
       <section id="overview-view">
+        <div class="panel" id="pipeline-panel">
+          <h2>운영 제어</h2>
+          <div id="pipeline-warning" class="notice hidden" role="status" aria-live="polite"></div>
+          <div class="stat-row">
+            <div>
+              <strong>수집(크롤링)</strong>
+              <div class="sub" id="collection-control-time">마지막 변경 —</div>
+            </div>
+            <div class="pipeline-actions">
+              <span class="pill partial" id="collection-control-state">확인 중</span>
+              <button class="btn" id="collection-control-button" type="button" disabled>중지</button>
+            </div>
+          </div>
+          <div class="stat-row">
+            <div>
+              <strong>AI 분석 요청</strong>
+              <div class="sub" id="analysis-control-time">마지막 변경 —</div>
+            </div>
+            <div class="pipeline-actions">
+              <span class="pill partial" id="analysis-control-state">확인 중</span>
+              <button class="btn" id="analysis-control-button" type="button" disabled>중지</button>
+            </div>
+          </div>
+          <div id="pipeline-message" class="sub" role="status" aria-live="polite"></div>
+          <div class="stat-row">
+            <strong>실패 분석 복구</strong>
+            <div class="pipeline-actions">
+              <select id="failure-hours" aria-label="실패 분석 조회 기간">
+                <option value="6">최근 6시간</option>
+                <option value="24" selected>최근 24시간</option>
+                <option value="72">최근 72시간</option>
+              </select>
+              <button class="btn" id="recover-analysis" type="button" disabled>복구</button>
+            </div>
+          </div>
+          <div id="failure-summary" class="sub" role="status" aria-live="polite">집계 확인 중…</div>
+          <div id="failure-reasons"></div>
+          <div id="failure-error" class="sub error" role="alert"></div>
+          <div id="recovery-message" class="sub" role="status" aria-live="polite"></div>
+        </div>
         <div class="panel" style="margin-bottom: 20px">
           <h2>모델 버전별 재분석</h2>
           <p class="sub">
@@ -939,6 +1001,153 @@
         exhausted: "최대 시도 횟수 초과",
         legacy_unknown: "원인 미기록 (구분 기록 이전)",
       };
+      let pipelineControl = null,
+        pipelineActionBusy = false,
+        pipelineRevision = 0,
+        failureData = null,
+        failureBusy = false,
+        recoveryBusy = false,
+        failureGeneration = 0,
+        failureLastAttempt = 0,
+        failureTimer = null,
+        pipelinePanelVisible = true;
+      const pipelineNames = { collection: "수집(크롤링)", analysis: "AI 분석 요청" };
+      function renderPipelineControl() {
+        const warnings = [];
+        for (const target of ["collection", "analysis"]) {
+          const known = typeof pipelineControl?.[`${target}_paused`] === "boolean",
+            paused = pipelineControl?.[`${target}_paused`],
+            state = $(`${target}-control-state`),
+            button = $(`${target}-control-button`);
+          state.className = "pill " + (!known ? "partial" : paused ? "offline" : "alive");
+          state.textContent = !known ? "확인 중" : paused ? "중지됨" : "실행 중";
+          $(`${target}-control-time`).textContent =
+            "마지막 변경 " + date(pipelineControl?.[`${target}_updated_at`]);
+          button.textContent = paused ? "재개" : "중지";
+          button.disabled = !known || pipelineActionBusy;
+          if (known && paused)
+            warnings.push(`${pipelineNames[target]}이 중지되어 있습니다. 대기 중인 작업은 재개 후 처리됩니다.`);
+        }
+        $("pipeline-warning").textContent = warnings.join(" ");
+        $("pipeline-warning").classList.toggle("hidden", !warnings.length);
+      }
+      function applyPipelineControl(value) {
+        if (
+          typeof value?.collection_paused !== "boolean" ||
+          typeof value?.analysis_paused !== "boolean"
+        ) return false;
+        pipelineControl = value;
+        renderPipelineControl();
+        return true;
+      }
+      async function pipelineAction(target) {
+        if (pipelineActionBusy || !pipelineControl) return;
+        const paused = pipelineControl[`${target}_paused`],
+          action = paused ? "resume" : "pause",
+          label = paused ? "재개" : "중지";
+        if (!confirm(`${pipelineNames[target]}을 ${label}하시겠습니까?`)) return;
+        pipelineActionBusy = true;
+        pipelineRevision++;
+        renderPipelineControl();
+        $("pipeline-message").classList.remove("error");
+        $("pipeline-message").textContent = "처리 중…";
+        try {
+          const result = await api(`/api/pipeline/${target}/${action}`, { method: "POST" });
+          if (!applyPipelineControl(result)) throw Error("운영 제어 상태를 확인하지 못했습니다.");
+          $("pipeline-message").textContent = `${pipelineNames[target]}을 ${label}했습니다.`;
+        } catch (e) {
+          $("pipeline-message").classList.add("error");
+          $("pipeline-message").textContent = e.message;
+        } finally {
+          // 변경 전에 시작된 실시간 조회가 이전 상태로 되돌리지 않게 한다.
+          pipelineRevision++;
+          pipelineActionBusy = false;
+          renderPipelineControl();
+        }
+        await refreshLive();
+      }
+      function failuresVisible() {
+        return tab === "overview" && pipelinePanelVisible && !document.hidden && !loggedOut();
+      }
+      function scheduleFailureRefresh() {
+        clearTimeout(failureTimer);
+        if (failuresVisible() && !recoveryBusy)
+          failureTimer = setTimeout(
+            () => loadAnalysisFailures(),
+            Math.max(1000, 60000 - (Date.now() - failureLastAttempt)),
+          );
+      }
+      function renderAnalysisFailures() {
+        $("recover-analysis").disabled =
+          recoveryBusy || failureBusy || !(Number(failureData?.recoverable) > 0);
+        $("failure-hours").disabled = recoveryBusy;
+        $("recover-analysis").textContent = recoveryBusy ? "복구 중…" : "복구";
+        $("failure-summary").textContent = failureData
+          ? `실패 ${num(failureData.total)}건 · 복구 가능 ${num(failureData.recoverable)}건`
+          : failureBusy ? "집계 확인 중…" : "집계를 확인하지 못했습니다.";
+        $("failure-reasons").innerHTML = (failureData?.by_reason || [])
+          .map((item) => `<div class="stat-row"><span>${esc(failureKinds[item.kind] || item.kind)}</span><span>${num(item.count)}건</span></div>`)
+          .join("");
+      }
+      async function loadAnalysisFailures(force = false) {
+        if (!failuresVisible() || (recoveryBusy && !force)) return;
+        if (!force && (failureBusy || Date.now() - failureLastAttempt < 60000)) {
+          scheduleFailureRefresh();
+          return;
+        }
+        clearTimeout(failureTimer);
+        const generation = ++failureGeneration,
+          hours = Number($("failure-hours").value);
+        failureLastAttempt = Date.now();
+        failureBusy = true;
+        if (failureData?.hours !== hours) failureData = null;
+        $("failure-error").textContent = "";
+        renderAnalysisFailures();
+        try {
+          const result = await api(`/api/analysis/failures?hours=${hours}`);
+          if (generation !== failureGeneration) return;
+          failureData = result;
+        } catch (e) {
+          if (generation !== failureGeneration) return;
+          failureData = null;
+          $("failure-error").textContent = e.message;
+        } finally {
+          if (generation === failureGeneration) {
+            failureBusy = false;
+            renderAnalysisFailures();
+            scheduleFailureRefresh();
+          }
+        }
+      }
+      async function recoverAnalysisFailures() {
+        if (recoveryBusy || failureBusy || !(Number(failureData?.recoverable) > 0)) return;
+        const hours = Number($("failure-hours").value);
+        if (!confirm(`최근 ${hours}시간의 실패 분석 중 복구 가능한 ${num(failureData.recoverable)}건을 다시 예약하시겠습니까?`)) return;
+        recoveryBusy = true;
+        clearTimeout(failureTimer);
+        $("recovery-message").classList.remove("error");
+        $("recovery-message").textContent = "처리 중…";
+        renderAnalysisFailures();
+        try {
+          const result = await api("/api/analysis/failures/recover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hours }),
+          });
+          $("recovery-message").textContent = `새로 예약 ${num(result.recovered)}건`;
+          // 복구 후 집계는 다음 분을 기다리지 않고 다시 확인한다.
+          failureData = null;
+          failureLastAttempt = 0;
+          await loadAnalysisFailures(true);
+        } catch (e) {
+          $("recovery-message").classList.add("error");
+          $("recovery-message").textContent = e.message;
+        } finally {
+          recoveryBusy = false;
+          renderAnalysisFailures();
+          scheduleFailureRefresh();
+        }
+      }
       function duration(from, to) {
         const minutes = Math.max(0, Math.round((new Date(to) - new Date(from)) / 60000));
         const days = Math.floor(minutes / 1440),
@@ -1349,8 +1558,11 @@
       async function refreshLive() {
         if (busy || loggedOut()) return;
         busy = true;
+        const revision = pipelineRevision;
         try {
           liveData = await api("/api/live");
+          if (revision === pipelineRevision && !pipelineActionBusy)
+            applyPipelineControl(liveData.pipeline_control);
           renderMerged();
           if (tab !== "overview" && liveTicks++ % 2 === 0) await loadList();
           $("error-banner").classList.add("hidden");
@@ -1386,6 +1598,8 @@
           renderMerged();
         }
         refreshSlow(true);
+        // 로그인 전 첫 조회가 401로 끝났어도 로그인·새로고침 직후 실패 집계를 바로 다시 읽는다.
+        loadAnalysisFailures(true);
         await refreshLive();
       }
       function switchTab(next) {
@@ -1424,6 +1638,8 @@
             .map((x) => `<option value="${x}">${states[x]}</option>`)
             .join("");
         if (tab !== "overview") loadList().catch(showError);
+        loadAnalysisFailures();
+        scheduleFailureRefresh();
       }
       function showError(e) {
         $("error-banner").textContent = e.message;
@@ -1583,6 +1799,7 @@
           $("token").value = $("password").value = "";
           $("login-modal").classList.add("hidden");
           await refresh();
+          loadAnalysisFailures();
         } catch (e) {
           $("token").value = $("password").value = "";
           $("login-error").textContent = e.message;
@@ -1654,8 +1871,33 @@
       };
       $("pause-refresh").onclick = () => refreshAction("pause");
       $("retry-refresh").onclick = () => refreshAction("retry-failed");
+      for (const target of ["collection", "analysis"])
+        $(`${target}-control-button`).onclick = () => pipelineAction(target);
+      $("failure-hours").onchange = () => {
+        failureGeneration++;
+        failureBusy = false;
+        failureData = null;
+        failureLastAttempt = 0;
+        $("failure-error").textContent = "";
+        $("recovery-message").textContent = "";
+        renderAnalysisFailures();
+        loadAnalysisFailures(true);
+      };
+      $("recover-analysis").onclick = recoverAnalysisFailures;
+      document.addEventListener("visibilitychange", () => {
+        loadAnalysisFailures();
+        scheduleFailureRefresh();
+      });
+      if (typeof IntersectionObserver !== "undefined") {
+        new IntersectionObserver(([entry]) => {
+          pipelinePanelVisible = entry.isIntersecting;
+          loadAnalysisFailures();
+          scheduleFailureRefresh();
+        }).observe($("pipeline-panel"));
+      }
       refreshLive();
       refreshSlow();
+      loadAnalysisFailures();
       setInterval(refreshLive, 5000);
     </script>
   </body>
