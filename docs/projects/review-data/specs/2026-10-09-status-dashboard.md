@@ -70,3 +70,13 @@
 - `reviews(first_collected_at)` 인덱스(`idx_reviews_first_collected_at`, 마이그레이션 `a3d51c7e4f20`)를 CONCURRENTLY로 추가해 추이 조회를 범위 조회로 바꾼다. 최초 수집 시각은 바뀌지 않아 재관측 UPDATE 비용은 늘지 않는다. `last_collected_at`에는 인덱스를 두지 않는다(재관측마다 값이 바뀌어 쓰기 비용이 커진다).
 - 저장 분석 결과 수는 결과 행을 세지 않고 상품별 최신 목표 버전 작업의 `result.review_count` 합으로 계산한다. 운영 데이터에서 작업 5,073건 모두 결과 행 수와 일치했다(합계 676,058, 0.16초).
 - 플랫폼별 리뷰 수와 리뷰 없는 상품 수는 전체를 세야 하는 값이라 그대로다. DB 컨테이너 메모리 512MB·`shared_buffers` 128MB에 DB가 1.4GB라 스캔이 디스크를 읽는 것이 남은 지연의 원인이다.
+
+## 운영 제어와 실패 분석 복구 (2026-10-20, #162)
+
+AI 서버 이전 중 502 장애로 10/20 20시(KST)부터 분석 요청이 모두 실패했고, 약 3,700건이 재시도를 소진해 failed로 끝났다.
+
+- `pipeline_control`(한 행)에 수집 중지·AI 분석 요청 중지를 저장한다(마이그레이션 `f1c83a5e7b29`, `CREATE TABLE IF NOT EXISTS`라 장애 중 배포 전에 운영에서 먼저 만들어 중지 상태를 넣어 둘 수 있다).
+  - AI 분석 요청 중지: 분석 워커가 작업을 꺼내지 않는다. 대기열은 남는다.
+  - 수집 중지: 수집 워커(사람이 요청한 작업 포함), 정기 예약, 자동 발굴이 멈추고, 쇼핑몰에 직접 요청하는 API(`/{platform}/search`, 상품·리뷰 즉시 수집, 리뷰 스트림)는 503을 반환한다. 상태를 읽지 못하면 막지 않는다.
+- `/status` 운영 제어 패널에서 중지·재개하고(`POST /status/api/pipeline/{collection|analysis}/{pause|resume}`), 상태는 `/status/api/live`의 `pipeline_control`로 5초마다 보인다.
+- 실패 분석 복구: `GET /status/api/analysis/failures?hours=N`(1~168)이 상품별 최신 작업이 기간 안의 실패인 건을 원인별로 세고, `POST /status/api/analysis/failures/recover`가 AI 쪽 원인(HTTP 오류·연결 실패·시간 초과·처리 중 충돌·오류 응답·시도 소진)이면서 현재 목표 버전으로 요청했던 것만 같은 입력·새 작업 ID로 다시 예약한다. 응답 검증·저장 실패는 다시 보내도 같은 결과라 제외한다. 이미 대기·처리 중인 상품은 건너뛴다.

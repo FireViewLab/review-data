@@ -1,5 +1,6 @@
 venv/
-.venv/
+# 가상환경을 다른 작업 폴더에 링크로 둘 때도 제외되도록 끝 / 없이 쓴다.
+.venv
 __pycache__/
 *.py[cod]
 .env

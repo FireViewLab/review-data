@@ -6,7 +6,7 @@ import hmac
 import logging
 import secrets
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -18,7 +18,9 @@ from sqlalchemy import func, select, text
 
 from review_data.api.v1 import SessionDep
 from review_data.core.db.analysis_control import control_status, effective_analysis_settings
+from review_data.core.db.analysis_repository import failure_summary, recover_failures
 from review_data.core.db.models import AnalysisRefreshControl
+from review_data.core.db.pipeline_control import pipeline_state, set_paused
 from review_data.core.service.analysis_refresh import (
     AnalysisRefreshService,
     campaign_status,
@@ -168,6 +170,56 @@ async def pause_refresh(request: Request, session: SessionDep):
     return {"control": await control_status(session, settings)}
 
 
+def _pipeline_payload(state: dict) -> dict:
+    return {
+        key: value.isoformat() if isinstance(value, datetime) else value
+        for key, value in state.items()
+    }
+
+
+@router.post("/api/pipeline/{target}/{action}")
+async def pipeline_action(
+    target: Literal["collection", "analysis"],
+    action: Literal["pause", "resume"],
+    request: Request,
+    session: SessionDep,
+):
+    """외부 장애 때 수집 또는 AI 분석 요청을 멈추고 다시 시작한다. 대기열은 지우지 않는다."""
+    validate_control_request(request)
+    state = await set_paused(session, target, action == "pause")
+    await session.commit()
+    request.app.state.status_cache = request.app.state.status_live_cache = None
+    logger.info("운영 제어: %s %s", target, action)
+    return _pipeline_payload(state)
+
+
+@router.get("/api/analysis/failures")
+async def analysis_failures(
+    session: SessionDep, hours: Annotated[int, Query(ge=1, le=168)] = 24
+) -> dict:
+    settings = await effective_analysis_settings(session, get_settings())
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    return {"hours": hours, **await failure_summary(session, since, settings)}
+
+
+class RecoverFailures(BaseModel):
+    hours: int = Field(ge=1, le=168)
+
+
+@router.post("/api/analysis/failures/recover")
+async def recover_analysis_failures(body: RecoverFailures, request: Request, session: SessionDep):
+    """AI 쪽 원인으로 실패한 분석을 새 작업 ID로 다시 예약한다. 중지 중이면 재개 후 처리된다."""
+    validate_control_request(request)
+    settings = await effective_analysis_settings(session, get_settings())
+    since = datetime.now(UTC) - timedelta(hours=body.hours)
+    await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+    recovered = await recover_failures(session, since, settings)
+    await session.commit()
+    request.app.state.status_cache = request.app.state.status_live_cache = None
+    logger.info("실패 분석 복구: 최근 %s시간, %s건 재예약", body.hours, recovered)
+    return {"recovered": recovered}
+
+
 @router.post("/api/analysis-refresh/retry-failed")
 async def retry_refresh(request: Request, session: SessionDep):
     validate_control_request(request)
@@ -246,6 +298,7 @@ async def build_live(app, session) -> dict:
         "checked_at": datetime.now(UTC).isoformat(),
         "queues": await queue_status(session),
         "discovery": await discovery_status(session),
+        "pipeline_control": _pipeline_payload(await pipeline_state(session)),
     }
     result["resources"] = app.state.resource_metrics
     result["rates_15m"] = (

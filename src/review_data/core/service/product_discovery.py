@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from review_data.core.browser import BrowserCollector
 from review_data.core.db.analysis_repository import has_prior_result
 from review_data.core.db.models import AnalysisJob, DiscoveryState
+from review_data.core.db.pipeline_control import collection_stopped
 from review_data.core.db.repository import CollectionJobRepository
 from review_data.core.service.catalog import register_search_products
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
@@ -232,7 +233,11 @@ class ProductDiscoveryService:
             await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
             from review_data.core.service.analysis_refresh import collection_paused
 
-            if await collection_paused(session, self.settings) or not await self._room(session):
+            if (
+                await collection_paused(session, self.settings)
+                or await collection_stopped(session)
+                or not await self._room(session)
+            ):
                 return None
             await session.execute(
                 insert(DiscoveryState)

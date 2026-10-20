@@ -231,6 +231,12 @@ async def test_search_api_maps_unsupported_and_browser_errors(
 
     collector_cls = NaverCollector if platform == "naver" else SearchingBrowser
     monkeypatch.setattr(api, "_get_collector_cls", lambda _: lambda: collector_cls(settings()))
+
+    async def running(request):
+        return None
+
+    # 요청 객체 없이 함수를 직접 부르므로 운영 제어(수집 중지) 확인은 건너뛴다.
+    monkeypatch.setattr(api, "_ensure_collection_running", running)
     resources.pw.chromium.launch.side_effect = PlaywrightError("launch unavailable")
     with pytest.raises(HTTPException) as caught:
         await api.search(None, platform, "test")
