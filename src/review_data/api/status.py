@@ -18,7 +18,11 @@ from sqlalchemy import func, select, text
 
 from review_data.api.v1 import SessionDep
 from review_data.core.db.analysis_control import control_status, effective_analysis_settings
-from review_data.core.db.analysis_repository import failure_summary, recover_failures
+from review_data.core.db.analysis_repository import (
+    failure_summary,
+    latest_recovery,
+    recover_failures,
+)
 from review_data.core.db.models import AnalysisRefreshControl
 from review_data.core.db.pipeline_control import pipeline_state, set_paused
 from review_data.core.service.analysis_refresh import (
@@ -213,7 +217,7 @@ async def recover_analysis_failures(body: RecoverFailures, request: Request, ses
     settings = await effective_analysis_settings(session, get_settings())
     since = datetime.now(UTC) - timedelta(hours=body.hours)
     await session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
-    recovered = await recover_failures(session, since, settings)
+    recovered = await recover_failures(session, since, settings, hours=body.hours)
     await session.commit()
     request.app.state.status_cache = request.app.state.status_live_cache = None
     logger.info("실패 분석 복구: 최근 %s시간, %s건 재예약", body.hours, recovered)
@@ -299,6 +303,7 @@ async def build_live(app, session) -> dict:
         "queues": await queue_status(session),
         "discovery": await discovery_status(session),
         "pipeline_control": _pipeline_payload(await pipeline_state(session)),
+        "recovery": await latest_recovery(session, datetime.now(UTC)),
     }
     result["resources"] = app.state.resource_metrics
     result["rates_15m"] = (
