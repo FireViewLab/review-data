@@ -349,3 +349,14 @@ class PipelineControl(Base):
     analysis_paused: Mapped[bool] = mapped_column(server_default=text("false"))
     collection_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     analysis_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnalysisRecovery(Base):
+    """실패 분석 복구 한 번에 다시 예약한 작업 목록. 화면에서 진행률을 보여 주는 데 쓴다."""
+
+    __tablename__ = "analysis_recoveries"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    hours: Mapped[int]
+    job_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), server_default="{}")

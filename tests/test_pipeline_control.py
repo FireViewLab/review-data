@@ -11,9 +11,10 @@ from review_data.api import status
 from review_data.core.db.analysis_repository import (
     FAILURE_REASONS,
     failure_summary,
+    latest_recovery,
     recover_failures,
 )
-from review_data.core.db.models import AnalysisJob, CollectionJob, ProductRow
+from review_data.core.db.models import AnalysisJob, AnalysisRecovery, CollectionJob, ProductRow
 from review_data.core.db.pipeline_control import pipeline_state, set_paused
 from review_data.core.service.scheduling import SchedulingService
 from review_data.core.settings import Settings, get_settings
@@ -153,3 +154,31 @@ def test_status_controls_live_state_and_direct_api(engine, dashboard_settings):
         recovered = client.post("/status/api/analysis/failures/recover", json={"hours": 24})
         assert recovered.json() == {"recovered": 0}
         assert client.get("/status/api/analysis/failures?hours=0").status_code == 422
+
+
+async def test_recovery_is_recorded_and_progress_reported(session):
+    for pid in ("a", "b", "c"):
+        session.add(ProductRow(platform="kurly", product_id=pid, name="상품", url="https://x"))
+    await session.flush()
+    for pid in ("a", "b", "c"):
+        await _failed(session, pid, FAILURE_REASONS["http"])
+    since = NOW - timedelta(hours=24)
+    assert await latest_recovery(session, datetime.now(UTC)) is None
+    assert await recover_failures(session, since, config(), hours=24) == 3
+    recovery = await session.scalar(select(AnalysisRecovery))
+    assert recovery.hours == 24 and len(recovery.job_ids) == 3
+
+    jobs = {j.product_id: j for j in (await session.scalars(
+        select(AnalysisJob).where(AnalysisJob.id.in_(recovery.job_ids))
+    ))}
+    jobs["a"].status, jobs["a"].completed_at = "done", datetime.now(UTC)
+    jobs["b"].status = "stale"
+    await session.flush()
+    progress = await latest_recovery(session, datetime.now(UTC))
+    assert progress["total"] == 3
+    assert (progress["done"], progress["superseded"], progress["queued"]) == (1, 1, 1)
+    # 최근 15분에 1건 완료, 남은 1건 → 약 15분.
+    assert progress["recent_done_15m"] == 1 and progress["estimated_remaining_seconds"] == 900
+    # 복구 건수가 0이면 기록하지 않는다.
+    assert await recover_failures(session, since, config(), hours=24) == 0
+    assert len(list(await session.scalars(select(AnalysisRecovery)))) == 1
