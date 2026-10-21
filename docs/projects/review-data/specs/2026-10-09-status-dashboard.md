@@ -80,3 +80,4 @@ AI 서버 이전 중 502 장애로 10/20 20시(KST)부터 분석 요청이 모�
   - 수집 중지: 수집 워커(사람이 요청한 작업 포함), 정기 예약, 자동 발굴이 멈추고, 쇼핑몰에 직접 요청하는 API(`/{platform}/search`, 상품·리뷰 즉시 수집, 리뷰 스트림)는 503을 반환한다. 상태를 읽지 못하면 막지 않는다.
 - `/status` 운영 제어 패널에서 중지·재개하고(`POST /status/api/pipeline/{collection|analysis}/{pause|resume}`), 상태는 `/status/api/live`의 `pipeline_control`로 5초마다 보인다.
 - 실패 분석 복구: `GET /status/api/analysis/failures?hours=N`(1~168)이 상품별 최신 작업이 기간 안의 실패인 건을 원인별로 세고, `POST /status/api/analysis/failures/recover`가 AI 쪽 원인(HTTP 오류·연결 실패·시간 초과·처리 중 충돌·오류 응답·시도 소진)이면서 현재 목표 버전으로 요청했던 것만 같은 입력·새 작업 ID로 다시 예약한다. 응답 검증·저장 실패는 다시 보내도 같은 결과라 제외한다. 이미 대기·처리 중인 상품은 건너뛴다.
+- 복구할 때마다 다시 예약한 작업 ID 목록을 `analysis_recoveries`에 기록한다(마이그레이션 `a8d4e2f07c61`). `/status/api/live`의 `recovery`가 최근 7일 안 마지막 복구의 완료·처리 중·대기·다시 실패·대체(stale) 건수와 최근 15분 완료 수, 남은 예상 시간을 주고, 운영 제어 패널에 진행 막대로 표시한다(#166).

@@ -15,6 +15,7 @@ from review_data.core.db.models import (
     AnalysisCampaign,
     AnalysisCampaignItem,
     AnalysisJob,
+    AnalysisRecovery,
     ProductRow,
     ReviewAnalysisRow,
 )
@@ -104,8 +105,13 @@ async def failure_summary(session: AsyncSession, since: datetime, settings: Sett
     }
 
 
-async def recover_failures(session: AsyncSession, since: datetime, settings: Settings) -> int:
-    """AI 쪽 원인으로 실패한 작업을 같은 입력·새 작업 ID로 다시 예약한다."""
+async def recover_failures(
+    session: AsyncSession, since: datetime, settings: Settings, hours: int | None = None
+) -> int:
+    """AI 쪽 원인으로 실패한 작업을 같은 입력·새 작업 ID로 다시 예약한다.
+
+    hours 를 주면 다시 예약한 작업 목록을 기록해 화면에서 진행률을 볼 수 있게 한다.
+    """
     result = await session.execute(
         text(f"""
         WITH candidates AS ({_RECOVERY_CANDIDATES})
@@ -122,7 +128,55 @@ async def recover_failures(session: AsyncSession, since: datetime, settings: Set
         """),
         _recovery_params(since, settings),
     )
-    return len(result.all())
+    job_ids = sorted(row.id for row in result.all())
+    if job_ids and hours is not None:
+        session.add(AnalysisRecovery(hours=hours, job_ids=job_ids))
+        await session.flush()
+    return len(job_ids)
+
+
+async def latest_recovery(session: AsyncSession, now: datetime) -> dict | None:
+    """최근 7일 안의 마지막 복구에서 다시 예약한 작업들의 처리 상태."""
+    recovery = await session.scalar(
+        select(AnalysisRecovery)
+        .where(AnalysisRecovery.created_at > now - timedelta(days=7))
+        .order_by(AnalysisRecovery.id.desc())
+        .limit(1)
+    )
+    if recovery is None:
+        return None
+    rows = await session.execute(
+        text("""
+        SELECT status, count(*) AS count,
+            count(*) FILTER (WHERE status='done' AND completed_at > :recent) AS recent
+        FROM analysis_jobs WHERE id = ANY(:ids) GROUP BY status
+    """),
+        {"ids": recovery.job_ids, "recent": now - timedelta(minutes=15)},
+    )
+    counts = {"done": 0, "running": 0, "queued": 0, "failed": 0, "superseded": 0}
+    recent_done = 0
+    for status, count, recent in rows:
+        # stale 은 리뷰가 바뀌어 새 작업으로 넘어간 것이다.
+        key = "superseded" if status == "stale" else status
+        counts[key] = counts.get(key, 0) + count
+        recent_done += recent
+    remaining = counts["running"] + counts["queued"]
+    if not remaining:
+        estimate = 0
+    elif recent_done:
+        # 최근 15분 처리 속도로 남은 시간을 추정한다.
+        estimate = round(remaining * 900 / recent_done)
+    else:
+        estimate = None  # 처리 기록이 없으면 알 수 없다.
+    return {
+        "id": recovery.id,
+        "created_at": recovery.created_at.isoformat(),
+        "hours": recovery.hours,
+        "total": sum(counts.values()),
+        **counts,
+        "recent_done_15m": recent_done,
+        "estimated_remaining_seconds": estimate,
+    }
 
 
 def has_prior_result(job=AnalysisJob):
