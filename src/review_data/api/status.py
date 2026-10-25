@@ -7,6 +7,7 @@ import logging
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -30,6 +31,7 @@ from review_data.core.service.analysis_refresh import (
     campaign_status,
     collection_paused,
 )
+from review_data.core.service.dashboard import platform_status, timeseries
 from review_data.core.service.operations import (
     collection_metrics,
     discovery_status,
@@ -467,6 +469,39 @@ async def overview(request: Request, session: SessionDep, refresh: bool = False)
         app.state.status_refresh_task = asyncio.create_task(_refresh_overview(app, cached))
         refreshing = True
     return {**cached[1], "refreshing": refreshing}
+
+
+TIMESERIES_TTL_SECONDS = 30
+
+
+@router.get("/api/timeseries")
+async def dashboard_timeseries(
+    request: Request,
+    session: SessionDep,
+    range: Annotated[Literal["1h", "6h", "24h", "7d"], Query()] = "6h",  # noqa: A002
+) -> dict:
+    """처리량 추이. 여러 화면이 열려 있어도 기간별로 30초에 한 번만 집계한다."""
+    cache = request.app.state.__dict__.setdefault("status_timeseries_cache", {})
+    cached = cache.get(range)
+    if cached and time.monotonic() - cached[0] < TIMESERIES_TTL_SECONDS:
+        return cached[1]
+    result = await timeseries(session, range)
+    cache[range] = time.monotonic(), result
+    return result
+
+
+@lru_cache
+def _platform_labels() -> dict[str, str]:
+    from review_data.core.discovery import discover
+
+    registry, _ = discover()
+    return {name: getattr(cls, "label", name) for name, cls in registry.items()}
+
+
+@router.get("/api/platforms")
+async def dashboard_platforms(session: SessionDep) -> dict:
+    """플랫폼별 수집 상태: 차단 대기·시험, 수집 간격, 대기 작업, 최근 성공·실패."""
+    return await platform_status(session, get_settings(), _platform_labels())
 
 
 @router.get("/api/jobs/{kind}")
