@@ -36,9 +36,16 @@
       button {
         cursor: pointer;
       }
+      body {
+        display: grid;
+        grid-template-columns: 216px minmax(0, 1fr);
+        align-items: start;
+      }
       aside {
-        position: fixed;
-        inset: 0 auto 0 0;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
         width: 216px;
         background: #142036;
         color: #a7b4cd;
@@ -89,7 +96,8 @@
         padding: 16px;
       }
       main {
-        margin-left: 216px;
+        margin-left: 0;
+        width: 100%;
         padding: 32px 38px;
         max-width: 1740px;
       }
@@ -559,11 +567,12 @@
         margin-top: 12px;
       }
       @media (max-width: 1100px) {
+        body { grid-template-columns: 175px minmax(0, 1fr); }
         aside {
           width: 175px;
         }
         main {
-          margin-left: 175px;
+          margin-left: 0;
           padding: 25px;
         }
         .cards {
@@ -574,7 +583,10 @@
         }
       }
       @media (max-width: 700px) {
+        body { display: block; }
         aside {
+          height: auto;
+          overflow-y: visible;
           position: static;
           width: auto;
           padding: 16px;
@@ -631,19 +643,55 @@
           grid-template-columns: 1fr;
         }
       }
+
+      :root { --red: #d03b3b; --green: #0ca30c; --orange: #916500; }
+      main, section, .panel, .card, .grid > *, header > * { min-width: 0; }
+      section > .panel { margin-bottom: 20px; }
+      #collection-rates, #analysis-rates { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 16px 0 0; }
+      #totals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .chart-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+      .chart-heading h2 { margin: 0; }
+      .chart-filters { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+      .legend { flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; color: var(--ink); }
+      .legend span, .tooltip-row { display: flex; align-items: center; gap: 7px; }
+      .series-swatch { display: inline-block; width: 16px; height: 3px; flex-shrink: 0; }
+      .chart-canvas { position: relative; outline-offset: 3px; touch-action: pan-y; }
+      .chart-canvas svg { display: block; height: 240px; overflow: hidden; }
+      .chart-tooltip { position: absolute; top: 8px; z-index: 2; background: white; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; box-shadow: 0 4px 18px #14203620; pointer-events: none; font-size: 11px; max-width: calc(100% - 12px); }
+      .tooltip-row { margin-top: 4px; flex-wrap: wrap; }
+      .chart-table { margin-top: 12px; }
+      #overview-alerts.good { background: #f1faf1; border-color: #cde9cd; color: var(--ink); }
+      .pill.normal { background: #e8f6e8; color: #087a08; }
+      .pill.paused, .pill.probing { background: #fff5d9; color: #805600; border-left: 3px solid #fab219; }
+      .pill.excluded, .pill.inactive { background: #edf1f7; color: #61728b; }
+      .foot { gap: 10px; flex-wrap: wrap; }
+      input, select { max-width: 100%; }
+      .stat-row, .platform-stat, .worker { gap: 10px; flex-wrap: wrap; }
+      @media (max-width: 700px) {
+        #totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        header { flex-wrap: wrap; }
+        .tools { justify-content: flex-start; }
+        input.search { min-width: 0; width: 100%; }
+        .filter > input { min-width: 0; width: 100%; }
+        .brand small { margin-bottom: 14px; }
+        .nav { padding: 8px; }
+        .value { overflow-wrap: anywhere; }
+        .dialog-head, .dialog-body { padding: 16px; }
+      }
     </style>
   </head>
   <body data-spring-login="0">
     <aside>
       <div class="brand">Re:<em>view</em><small>DATA OPERATIONS</small></div>
       <button class="nav active" data-tab="overview">
-        <span>◈</span> 운영 개요</button
+        <span>◈</span> 개요</button
       ><button class="nav" data-tab="collection">
-        <span>↓</span> 리뷰 수집</button
+        <span>↓</span> 수집</button
       ><button class="nav" data-tab="analysis"><span>↗</span> AI 분석</button
       ><button class="nav" data-tab="products">
         <span>▦</span> 상품 데이터
       </button>
+      <button class="nav" data-tab="system"><span>⚙</span> 시스템</button>
       <div class="sidebar-foot">
         Data 서버 운영 모니터<br />수집 → 저장 → 분석 → 결과
       </div>
@@ -663,49 +711,285 @@
       </header>
       <div id="error-banner" class="notice hidden" role="alert"></div>
       <section id="overview-view">
+        <div id="overview-alerts" class="notice" role="status">
+          운영 상태 확인 중…
+        </div>
+        <div class="cards" id="totals">
+        </div>
+        <div class="chart-filters">
+          <label for="overview-range">기간</label>
+          <select id="overview-range" class="dashboard-range">
+            <option value="1h">최근 1시간</option>
+            <option value="6h" selected>최근 6시간</option>
+            <option value="24h">최근 24시간</option>
+            <option value="7d">최근 7일</option>
+          </select>
+        </div>
+        <div class="panel chart-panel" data-chart="reviews">
+          <div class="chart-heading">
+            <h2>
+              리뷰 처리량
+            </h2>
+            <div class="pipeline-actions">
+              <button class="btn chart-toggle" type="button" aria-expanded="false">
+                표로 보기
+              </button>
+            </div>
+          </div>
+          <div class="sub">
+            단위: 리뷰 건수 · 마지막 구간은 진행 중
+          </div>
+          <div class="chart-error sub error" role="status">
+          </div>
+          <div class="legend">
+          </div>
+          <div class="chart-canvas" tabindex="0" role="group" aria-label="리뷰 처리량, 좌우 화살표로 구간 탐색">
+            <div class="chart-tooltip hidden" role="status">
+            </div>
+          </div>
+          <div class="chart-table table-wrap hidden">
+          </div>
+        </div>
+        <div class="panel chart-panel" data-chart="jobs">
+          <div class="chart-heading">
+            <h2>
+              작업 처리량
+            </h2>
+            <div class="pipeline-actions">
+              <button class="btn chart-toggle" type="button" aria-expanded="false">
+                표로 보기
+              </button>
+            </div>
+          </div>
+          <div class="sub">
+            단위: 작업 건수 · 마지막 구간은 진행 중
+          </div>
+          <div class="chart-error sub error" role="status">
+          </div>
+          <div class="legend">
+          </div>
+          <div class="chart-canvas" tabindex="0" role="group" aria-label="작업 처리량, 좌우 화살표로 구간 탐색">
+            <div class="chart-tooltip hidden" role="status">
+            </div>
+          </div>
+          <div class="chart-table table-wrap hidden">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            워커 요약
+          </h2>
+          <div id="worker-summary">
+          </div>
+        </div>
+      </section>
+      <section id="collection-view" class="hidden">
+        <div class="panel">
+          <h2>
+            수집 제어
+          </h2>
+          <div class="stat-row">
+            <div>
+              <strong>
+                수집(크롤링)
+              </strong>
+              <div class="sub" id="collection-control-time">
+                마지막 변경 —
+              </div>
+            </div>
+            <div class="pipeline-actions">
+              <span class="pill partial" id="collection-control-state">
+                확인 중
+              </span>
+              <button class="btn" id="collection-control-button" type="button" disabled>
+                중지
+              </button>
+            </div>
+          </div>
+          <div id="collection-control-message" class="sub" role="status">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            플랫폼 수집 상태
+          </h2>
+          <div id="platform-error" class="sub error" role="status">
+          </div>
+          <div class="table-wrap" id="platform-status">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            수집 대기열
+          </h2>
+          <div id="collection-queue">
+          </div>
+          <div class="cards" id="collection-rates">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            독립 상품 발굴
+          </h2>
+          <div id="discovery">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            수집 실패 원인
+          </h2>
+          <div id="failures">
+          </div>
+        </div>
+        <div class="chart-filters">
+          <label for="collection-range">기간</label>
+          <select id="collection-range" class="dashboard-range">
+            <option value="1h">최근 1시간</option>
+            <option value="6h" selected>최근 6시간</option>
+            <option value="24h">최근 24시간</option>
+            <option value="7d">최근 7일</option>
+          </select>
+        </div>
+        <div class="panel chart-panel" data-chart="platform">
+          <div class="chart-heading">
+            <h2>
+              플랫폼별 수집 처리량
+            </h2>
+            <div class="pipeline-actions">
+              <button class="btn chart-toggle" type="button" aria-expanded="false">
+                표로 보기
+              </button>
+            </div>
+          </div>
+          <div class="sub">
+            단위: 성공 작업 수 · 마지막 구간은 진행 중
+          </div>
+          <div class="chart-error sub error" role="status">
+          </div>
+          <div class="legend">
+          </div>
+          <div class="chart-canvas" tabindex="0" role="group" aria-label="플랫폼별 수집 처리량, 좌우 화살표로 구간 탐색">
+            <div class="chart-tooltip hidden" role="status">
+            </div>
+          </div>
+          <div class="chart-table table-wrap hidden">
+          </div>
+        </div>
+      </section>
+      <section id="analysis-view" class="hidden">
+        <div class="panel">
+          <h2>
+            AI 분석 요청 제어
+          </h2>
+          <div class="stat-row">
+            <div>
+              <strong>
+                AI 분석 요청
+              </strong>
+              <div class="sub" id="analysis-control-time">
+                마지막 변경 —
+              </div>
+            </div>
+            <div class="pipeline-actions">
+              <span class="pill partial" id="analysis-control-state">
+                확인 중
+              </span>
+              <button class="btn" id="analysis-control-button" type="button" disabled>
+                중지
+              </button>
+            </div>
+          </div>
+          <div id="analysis-control-message" class="sub" role="status">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            분석 대기열
+          </h2>
+          <div id="analysis-queue">
+          </div>
+          <div class="cards" id="analysis-rates">
+          </div>
+        </div>
+        <div class="chart-filters">
+          <label for="analysis-range">기간</label>
+          <select id="analysis-range" class="dashboard-range">
+            <option value="1h">최근 1시간</option>
+            <option value="6h" selected>최근 6시간</option>
+            <option value="24h">최근 24시간</option>
+            <option value="7d">최근 7일</option>
+          </select>
+        </div>
+        <div class="panel chart-panel" data-chart="analysis">
+          <div class="chart-heading">
+            <h2>
+              분석 처리량
+            </h2>
+            <div class="pipeline-actions">
+              <button class="btn chart-toggle" type="button" aria-expanded="false">
+                표로 보기
+              </button>
+            </div>
+          </div>
+          <div class="sub">
+            단위: 작업 건수 · 마지막 구간은 진행 중
+          </div>
+          <div class="chart-error sub error" role="status">
+          </div>
+          <div class="legend">
+          </div>
+          <div class="chart-canvas" tabindex="0" role="group" aria-label="분석 처리량, 좌우 화살표로 구간 탐색">
+            <div class="chart-tooltip hidden" role="status">
+            </div>
+          </div>
+          <div class="chart-table table-wrap hidden">
+          </div>
+        </div>
         <div class="panel" id="pipeline-panel">
-          <h2>운영 제어</h2>
-          <div id="pipeline-warning" class="notice hidden" role="status" aria-live="polite"></div>
-          <div class="stat-row">
-            <div>
-              <strong>수집(크롤링)</strong>
-              <div class="sub" id="collection-control-time">마지막 변경 —</div>
-            </div>
-            <div class="pipeline-actions">
-              <span class="pill partial" id="collection-control-state">확인 중</span>
-              <button class="btn" id="collection-control-button" type="button" disabled>중지</button>
-            </div>
+          <h2>
+            실패 분석 복구
+          </h2>
+          <div id="pipeline-warning" class="notice hidden" role="status">
+          </div>
+          <div id="pipeline-message" class="sub" role="status">
           </div>
           <div class="stat-row">
-            <div>
-              <strong>AI 분석 요청</strong>
-              <div class="sub" id="analysis-control-time">마지막 변경 —</div>
-            </div>
-            <div class="pipeline-actions">
-              <span class="pill partial" id="analysis-control-state">확인 중</span>
-              <button class="btn" id="analysis-control-button" type="button" disabled>중지</button>
-            </div>
-          </div>
-          <div id="pipeline-message" class="sub" role="status" aria-live="polite"></div>
-          <div class="stat-row">
-            <strong>실패 분석 복구</strong>
+            <strong>
+              실패 분석 복구
+            </strong>
             <div class="pipeline-actions">
               <select id="failure-hours" aria-label="실패 분석 조회 기간">
-                <option value="6">최근 6시간</option>
-                <option value="24" selected>최근 24시간</option>
-                <option value="72">최근 72시간</option>
+                <option value="6">
+                  최근 6시간
+                </option>
+                <option value="24" selected>
+                  최근 24시간
+                </option>
+                <option value="72">
+                  최근 72시간
+                </option>
               </select>
-              <button class="btn" id="recover-analysis" type="button" disabled>복구</button>
+              <button class="btn" id="recover-analysis" type="button" disabled>
+                복구
+              </button>
             </div>
           </div>
-          <div id="failure-summary" class="sub" role="status" aria-live="polite">집계 확인 중…</div>
-          <div id="failure-reasons"></div>
-          <div id="failure-error" class="sub error" role="alert"></div>
-          <div id="recovery-message" class="sub" role="status" aria-live="polite"></div>
-          <div id="recovery-progress" class="hidden" role="region" aria-label="최근 복구 진행"></div>
+          <div id="failure-summary" class="sub" role="status" aria-live="polite">
+            집계 확인 중…
+          </div>
+          <div id="failure-reasons">
+          </div>
+          <div id="failure-error" class="sub error" role="alert">
+          </div>
+          <div id="recovery-message" class="sub" role="status" aria-live="polite">
+          </div>
+          <div id="recovery-progress" class="hidden" role="region" aria-label="최근 복구 진행">
+          </div>
         </div>
         <div class="panel" style="margin-bottom: 20px">
-          <h2>모델 버전별 재분석</h2>
+          <h2>
+            모델 버전별 재분석
+          </h2>
           <p class="sub">
             AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
             맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
@@ -735,67 +1019,54 @@
               실패 건 재시도
             </button>
           </form>
-          <div id="refresh-control" class="sub"></div>
+          <div id="refresh-control" class="sub">
+          </div>
           <div
             id="refresh-message"
             class="sub"
             role="status"
             aria-live="polite"
-          ></div>
-          <div id="campaigns"></div>
-        </div>
-        <div class="cards" id="totals"></div>
-        <div class="section-title">서버 자원</div>
-        <div class="cards" id="resources"></div>
-        <div class="grid">
-          <div class="panel">
-            <h2>
-              리뷰 수집 · 분석 추이
-              <span class="sub">최근 1시간 / 5분 구간</span>
-            </h2>
-            <div class="legend">
-              <span><b style="background: #3267e3"></b>신규 저장 리뷰</span
-              ><span><b style="background: #27a28b"></b>분석 완료 리뷰</span>
-            </div>
-            <div id="chart"></div>
-            <div class="timeline-note">
-              현재 구간은 진행 중입니다. 재수집 갱신은 신규 저장 그래프에
-              포함되지 않습니다.
-            </div>
+          >
           </div>
-          <div class="panel">
-            <h2>워커 · 스케줄러</h2>
-            <div id="workers"></div>
-            <div class="sub">
-              10초 heartbeat · 35초 이상 응답이 없으면 오프라인
-            </div>
+          <div id="campaigns">
           </div>
         </div>
-        <div class="cards" id="rates"></div>
-        <div class="grid">
-          <div class="panel">
-            <h2>
-              수집 · 분석 큐
-              <button class="link" data-tab="collection">수집 상세 →</button>
-              <button class="link" data-tab="analysis">분석 상세 →</button>
-            </h2>
-            <div id="queues"></div>
+      </section>
+      <section id="products-view" class="hidden">
+      </section>
+      <section id="system-view" class="hidden">
+        <div class="cards" id="resources">
+        </div>
+        <div class="panel">
+          <h2>
+            워커 · 스케줄러
+          </h2>
+          <div id="workers">
           </div>
-          <div class="panel">
-            <h2>독립 상품 발굴</h2>
-            <div id="discovery"></div>
+          <div class="sub">
+            10초 heartbeat · 35초 이상 응답이 없으면 오프라인
           </div>
         </div>
-        <div class="grid">
-          <div class="panel">
-            <h2>플랫폼별 저장 데이터</h2>
-            <div id="platforms"></div>
+        <div class="panel">
+          <h2>
+            합계 기준 시각
+          </h2>
+          <div id="totals-time" class="sub">
+            합계 집계 중…
           </div>
-          <div class="panel">
-            <h2>최신 분석 상태 · 리뷰 없는 상품</h2>
-            <div id="health-breakdown"></div>
-            <div class="section-title">최신 수집 실패</div>
-            <div id="failures"></div>
+        </div>
+        <div class="panel">
+          <h2>
+            플랫폼별 저장 데이터
+          </h2>
+          <div id="platforms">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            최신 분석 상태 · 리뷰 없는 상품
+          </h2>
+          <div id="health-breakdown">
           </div>
         </div>
       </section>
@@ -906,6 +1177,7 @@
         bytes = (v) => (v == null ? "—" : (v / 1024 ** 3).toFixed(1) + " GB");
       const names = {
         kurly: "컬리",
+        ohouse: "오늘의집",
         oliveyoung: "올리브영",
         musinsa: "무신사",
         elevenst: "11번가",
@@ -967,36 +1239,6 @@
       function card(label, value, sub, bar) {
         return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div>${bar != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, bar))}%"></i></div>` : ""}<div class="sub">${sub}</div></div>`;
       }
-      function chart(items) {
-        if (!items.length) return;
-        const max = Math.max(
-            1,
-            ...items.flatMap((x) => [Number(x.collected), Number(x.analyzed)]),
-          ),
-          w = 650,
-          h = 145,
-          p = 25,
-          step = (w - 2 * p) / Math.max(1, items.length - 1);
-        let svg = `<svg viewBox="0 0 ${w} 180" role="img" aria-label="최근 한 시간의 신규 리뷰 저장과 분석 완료 건수"><title>5분 구간별 수집·분석 건수</title>`;
-        for (let i = 0; i < 4; i++) {
-          let y = 15 + (i * h) / 3;
-          svg += `<line x1="${p}" x2="${w - p}" y1="${y}" y2="${y}" stroke="#edf0f6"/><text x="0" y="${y + 4}" fill="#8593a7" font-size="9">${Math.round(max * (1 - i / 3))}</text>`;
-        }
-        for (const [key, color] of [
-          ["collected", "#3267e3"],
-          ["analyzed", "#27a28b"],
-        ]) {
-          svg += `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${items.map((x, i) => `${p + i * step},${15 + h - (Number(x[key]) / max) * h}`).join(" ")}"/>`;
-          items.forEach((x, i) => {
-            svg += `<circle cx="${p + i * step}" cy="${15 + h - (Number(x[key]) / max) * h}" r="3" fill="${color}"><title>${esc(date(x.bucket))} · ${key === "collected" ? "신규 저장" : "분석 완료"} ${num(x[key])}건</title></circle>`;
-          });
-        }
-        items.forEach((x, i) => {
-          if (i % 3 === 0 || i === items.length - 1)
-            svg += `<text x="${p + i * step}" y="177" text-anchor="middle" fill="#8593a7" font-size="10">${esc(new Date(x.bucket).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))}</text>`;
-        });
-        $("chart").innerHTML = svg + "</svg>";
-      }
       const failureKinds = {
         timeout: "AI 응답 시간 초과",
         conflict: "AI가 같은 작업을 처리 중 (409)",
@@ -1038,6 +1280,8 @@
         }
         $("pipeline-warning").textContent = warnings.join(" ");
         $("pipeline-warning").classList.toggle("hidden", !warnings.length);
+        $("collection-control-message").textContent = pipelineControl?.collection_paused ? "수집이 중지되어 있습니다. 대기 작업은 재개 후 처리됩니다." : "";
+        renderDashboardSummary();
         renderRecoveryProgress();
       }
       function renderRecoveryProgress() {
@@ -1105,11 +1349,13 @@
           pipelineRevision++;
           pipelineActionBusy = false;
           renderPipelineControl();
+          $(`${target}-control-message`).textContent = $("pipeline-message").textContent;
+          $(`${target}-control-message`).classList.toggle("error", $("pipeline-message").classList.contains("error"));
         }
         await refreshLive();
       }
       function failuresVisible() {
-        return tab === "overview" && pipelinePanelVisible && !document.hidden && !loggedOut();
+        return tab === "analysis" && pipelinePanelVisible && !document.hidden && !loggedOut();
       }
       function scheduleFailureRefresh() {
         clearTimeout(failureTimer);
@@ -1368,36 +1614,8 @@
             r.load ? r.load[0].toFixed(2) : "—",
             "5분 " + (r.load?.[1] ?? "—") + " · 15분 " + (r.load?.[2] ?? "—"),
           );
-        $("rates").innerHTML =
-          card(
-            "신규 리뷰 저장 / 분",
-            rate.new_reviews == null
-              ? pendingTotal
-              : (rate.new_reviews / 15).toFixed(1),
-            rate.new_reviews == null
-              ? "최근 15분"
-              : "최근 15분 · 갱신 포함 " +
-                  (rate.refreshed_reviews / 15).toFixed(1) +
-                  "건/분",
-          ) +
-          card(
-            "수집 완료 상품 / 분",
-            (rate.collected_products / 15).toFixed(1),
-            "리뷰 수집 성공 작업 기준",
-          ) +
-          card(
-            "AI 분석 입력 / 분",
-            (rate.ai_claimed_reviews / 15).toFixed(1),
-            "작업 claim 기준 근사치 · 재시도 시 영향",
-          ) +
-          card(
-            "AI 분석 완료 / 분",
-            (rate.ai_completed_reviews / 15).toFixed(1),
-            "done 작업의 입력 리뷰 건수 기준",
-          );
-        if (d.timeline.length) chart(d.timeline);
-        else if (!$("chart").innerHTML)
-          $("chart").innerHTML = '<div class="spinner">집계 중…</div>';
+        $("collection-rates").innerHTML = card("신규 리뷰 저장 / 분", rate.new_reviews == null ? pendingTotal : (rate.new_reviews / 15).toFixed(1), "최근 15분 · 갱신 포함 " + ((rate.refreshed_reviews || 0) / 15).toFixed(1) + "건/분") + card("수집 완료 상품 / 분", (rate.collected_products / 15).toFixed(1), "리뷰 수집 성공 작업 기준");
+        $("analysis-rates").innerHTML = card("AI 분석 입력 / 분", (rate.ai_claimed_reviews / 15).toFixed(1), "최근 15분 · 작업 claim 기준 근사치") + card("AI 분석 완료 / 분", (rate.ai_completed_reviews / 15).toFixed(1), "최근 15분 · 완료 작업의 입력 리뷰 건수");
         const roles = {
           collection: "수집 워커",
           analysis: "분석 워커",
@@ -1423,12 +1641,11 @@
             workers += `<div class="notice">${name}의 최근 heartbeat가 없습니다.</div>`;
         $("workers").innerHTML =
           workers || '<div class="empty">워커 신호 없음</div>';
-        $("queues").innerHTML = Object.entries(q)
-          .map(
-            ([key, x]) =>
-              `<div class="platform-stat"><strong>${key === "collection" ? "리뷰 수집" : "AI 분석"}</strong><span>대기 ${num(x.waiting)} · 처리 ${num(x.running)} · 만료 ${num(x.expired_leases)}</span></div><div class="sub">가장 오래된 대기 ${date(x.oldest_waiting_at)} · 재시도 소진 ${num(x.exhausted_leases)}</div>`,
-          )
-          .join("");
+        for (const key of ["collection", "analysis"]) {
+          const x = q[key];
+          $(`${key}-queue`).innerHTML = `<div class="stat-row"><strong>대기 ${num(x.waiting)}</strong><span>처리 중 ${num(x.running)} · 만료 ${num(x.expired_leases)}</span></div><div class="sub">가장 오래된 대기 ${date(x.oldest_waiting_at)} · 재시도 소진 ${num(x.exhausted_leases)}</div>` + (key === "analysis" ? `<div class="stat-row"><span>첫 분석 대기</span><strong>${num(x.first_time_pending ?? x.waiting)}</strong></div>` : "");
+        }
+        renderDashboardSummary();
         const [discoveryClass, discoveryLabel, discoveryReason] =
           discoveryState(d);
         $("discovery").innerHTML =
@@ -1581,6 +1798,7 @@
           ...live,
           rates_15m: { ...(slow.rates_15m || {}), ...live.rates_15m },
         });
+        $("totals-time").textContent = slowData ? date(slowData.checked_at) + " 기준 · 합계 1분마다 갱신" : "합계 집계 중…";
         $("connection").innerHTML = '<i class="dot"></i>실시간';
         $("updated").textContent = !slowData
           ? "합계 집계 중…"
@@ -1608,7 +1826,7 @@
           recoveryProgress = liveData.recovery ?? null;
           renderRecoveryProgress();
           renderMerged();
-          if (tab !== "overview" && liveTicks++ % 2 === 0) await loadList();
+          if (["collection", "analysis", "products"].includes(tab) && liveTicks++ % 2 === 0) await loadList();
           $("error-banner").classList.add("hidden");
         } catch (e) {
           showFailure(e);
@@ -1642,13 +1860,17 @@
           renderMerged();
         }
         refreshSlow(true);
+        refreshTimeseries(true);
+        refreshPlatforms(true);
         // 로그인 전 첫 조회가 401로 끝났어도 로그인·새로고침 직후 실패 집계를 바로 다시 읽는다.
         loadAnalysisFailures(true);
         await refreshLive();
       }
       function switchTab(next) {
         listGeneration++;
+        if (!["overview", "collection", "analysis", "products", "system"].includes(next)) next = "overview";
         tab = next;
+        if (location.hash !== "#" + tab) window.history.replaceState(null, "", "#" + tab);
         cursor = null;
         history = [];
         $("query").value = "";
@@ -1663,6 +1885,7 @@
             "수집 대기 · 처리 중 · 완료 상품과 저장 리뷰",
           ],
           analysis: ["AI 분석", "분석 요청 표본과 AI에서 받은 저장 결과"],
+          system: ["시스템", "서버 자원과 워커 · 스케줄러 상태"],
           products: [
             "상품 데이터",
             "플랫폼별 상품 · 저장 리뷰 · 최신 분석 상태",
@@ -1670,8 +1893,15 @@
         };
         $("page-title").textContent = titles[tab][0];
         $("page-desc").textContent = titles[tab][1];
-        $("overview-view").classList.toggle("hidden", tab !== "overview");
-        $("list-view").classList.toggle("hidden", tab === "overview");
+        for (const key of ["overview", "collection", "analysis", "products", "system"])
+          $(`${key}-view`).classList.toggle("hidden", tab !== key);
+        const hasList = ["collection", "analysis", "products"].includes(tab);
+        $("list-view").classList.toggle("hidden", !hasList);
+        if (hasList) $(`${tab}-view`).append($("list-view"));
+        pipelinePanelVisible = tab === "analysis";
+        refreshTimeseries();
+        refreshPlatforms();
+        renderVisibleCharts();
         $("job-status").classList.toggle("hidden", tab === "products");
         $("job-status").innerHTML =
           '<option value="">전체 상태</option>' +
@@ -1681,7 +1911,7 @@
           )
             .map((x) => `<option value="${x}">${states[x]}</option>`)
             .join("");
-        if (tab !== "overview") loadList().catch(showError);
+        if (hasList) loadList().catch(showError);
         loadAnalysisFailures();
         scheduleFailureRefresh();
       }
@@ -1939,6 +2169,286 @@
           scheduleFailureRefresh();
         }).observe($("pipeline-panel"));
       }
+      const seriesColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"];
+      const chartStates = new Map();
+      const platformColors = new Map();
+      const timeseriesCache = new Map();
+      const timeseriesRequests = new Map();
+      let selectedRange = "6h";
+      let platformData = null, platformBusy = false, platformReadAt = 0;
+      function visibleChartKeys() {
+        return { overview: ["reviews", "jobs"], collection: ["platform"], analysis: ["analysis"] }[tab] || [];
+      }
+      function renderDashboardSummary() {
+        const d = overviewData;
+        if (!d) return;
+        const hour = timeseriesCache.get("1h")?.data;
+        const failures = hour?.buckets.reduce((sum, b) => sum + Number(b.analysis_failed || 0), 0);
+        const completed = hour?.buckets.reduce((sum, b) => sum + Number(b.analysis_done || 0), 0);
+        const warnings = [];
+        if (pipelineControl?.collection_paused) warnings.push("수집 중지");
+        if (pipelineControl?.analysis_paused) warnings.push("AI 분석 요청 중지");
+        for (const item of platformData?.items || []) {
+          if (["paused", "probing"].includes(item.state)) warnings.push(`${item.label || names[item.platform] || item.platform}: ${item.state === "paused" ? "차단 대기" : "차단 후 시험 중"}`);
+        }
+        const offline = d.workers.filter(w => !w.alive).length;
+        if (offline) warnings.push(`오프라인 워커 ${num(offline)}개`);
+        if (failures > 0) warnings.push(`최근 1시간 분석 실패 ${num(failures)}건`);
+        const ready = pipelineControl && platformData && hour;
+        $("overview-alerts").textContent = warnings.length ? warnings.join(" · ") : ready ? "정상 운영 중" : "운영 상태 확인 중…";
+        $("overview-alerts").classList.toggle("good", !warnings.length && !!ready);
+        // 합계 타일은 기존 집계를 재사용하고 대기·완료 지표 두 개를 추가한다.
+        $("totals").querySelectorAll(".extra-total").forEach(x => x.remove());
+        for (const [label, value, note] of [
+          ["분석 대기", num(d.queues.analysis.waiting), `첫 분석 대기 ${num(d.queues.analysis.first_time_pending ?? d.queues.analysis.waiting)}건`],
+          ["최근 1시간 분석 완료", completed == null ? "집계 중" : num(completed), "완료 작업 건수 · 진행 중 구간 포함"],
+        ]) {
+          const tile = document.createElement("div");
+          tile.className = "card extra-total";
+          for (const [className, text] of [["label", label], ["value", value], ["sub", note]]) {
+            const node = document.createElement("div"); node.className = className; node.textContent = text; tile.append(node);
+          }
+          $("totals").append(tile);
+        }
+        const root = $("worker-summary"); root.replaceChildren();
+        for (const [role, label] of [["collection", "수집 워커"], ["analysis", "분석 워커"], ["scheduler", "스케줄러"]]) {
+          const workers = d.workers.filter(w => w.role === role);
+          const row = document.createElement("div"); row.className = "worker";
+          const text = document.createElement("strong"); text.textContent = `${label} · 살아 있음 ${workers.filter(w => w.alive).length}/${workers.length}`; row.append(text);
+          const actions = document.createElement("div"); actions.className = "pipeline-actions";
+          for (const w of workers) for (const kind of ["collection", "analysis"]) for (const job of w[`${kind}_jobs`] || []) {
+            const link = document.createElement("button"); link.className = "link"; link.dataset.kind = kind; link.dataset.id = job.id; link.textContent = `처리 중 #${job.id} →`; actions.append(link);
+          }
+          const link = document.createElement("button"); link.className = "link"; link.dataset.tab = "system"; link.textContent = "상세 →"; actions.append(link);
+          row.append(actions); root.append(row);
+        }
+      }
+      async function readTimeseries(range, force = false) {
+        if (timeseriesRequests.has(range)) return timeseriesRequests.get(range);
+        const cached = timeseriesCache.get(range);
+        if (!force && cached && Date.now() - cached.readAt < 60000) return cached.data;
+        const request = api(`/api/timeseries?range=${range}`).then(data => {
+          timeseriesCache.set(range, { data, readAt: Date.now() });
+          renderDashboardSummary();
+          return data;
+        }).finally(() => timeseriesRequests.delete(range));
+        timeseriesRequests.set(range, request);
+        return request;
+      }
+      async function refreshTimeseries(force = false) {
+        if (loggedOut()) return;
+        const keys = visibleChartKeys();
+        const ranges = new Set(["1h", ...(keys.length ? [selectedRange] : [])]);
+        await Promise.all([...ranges].map(async range => {
+          try {
+            await readTimeseries(range, force);
+            for (const state of chartStates.values()) if (selectedRange === range) state.panel.querySelector(".chart-error").textContent = "";
+          } catch (e) {
+            for (const key of visibleChartKeys()) {
+              const state = chartStates.get(key);
+              if (selectedRange === range || range === "1h") state.panel.querySelector(".chart-error").textContent = e.message;
+            }
+          }
+        }));
+        renderVisibleCharts();
+      }
+      async function refreshPlatforms(force = false) {
+        if (loggedOut() || platformBusy || (!force && tab !== "collection" && platformData)) return;
+        if (!force && Date.now() - platformReadAt < 30000) return;
+        platformBusy = true;
+        try {
+          platformData = await api("/api/platforms"); platformReadAt = Date.now();
+          $("platform-error").textContent = "";
+          renderPlatformStatus(); renderDashboardSummary();
+        } catch (e) { $("platform-error").textContent = e.message; }
+        finally { platformBusy = false; }
+      }
+      function renderPlatformStatus() {
+        const table = document.createElement("table");
+        const header = table.createTHead().insertRow();
+        for (const name of ["플랫폼", "상태", "주기", "대기 / 처리", "최근 성공 / 실패", "1시간 성공 / 실패", "24시간 실패 원인"]) {
+          const th = document.createElement("th"); th.textContent = name; header.append(th);
+        }
+        const labels = { normal: "정상", paused: "차단 대기", probing: "차단 후 한 건씩 시험", excluded: "수집 제외", inactive: "미수집" };
+        const body = table.createTBody();
+        const stateOrder = { paused: 0, probing: 1, normal: 2, excluded: 3, inactive: 4 };
+        const platformLabel = item => item.label || names[item.platform] || item.platform;
+        const sortedItems = [...platformData.items].sort((a, b) =>
+          ((stateOrder[a.state] ?? 5) - (stateOrder[b.state] ?? 5)) ||
+          platformLabel(a).localeCompare(platformLabel(b), "ko"),
+        );
+        for (const item of sortedItems) {
+          const row = body.insertRow();
+          row.insertCell().textContent = item.label || names[item.platform] || item.platform;
+          const badge = document.createElement("span"); badge.className = "pill " + (Object.hasOwn(labels, item.state) ? item.state : "excluded"); badge.textContent = labels[item.state] || "확인 필요"; row.insertCell().append(badge);
+          const interval = Number(item.interval_seconds);
+          const intervalLabel = interval > 0
+            ? `${num(interval)}초(시간당 최대 ${num(Math.floor(3600 / interval))}건)`
+            : "제한 없음";
+          for (const text of [intervalLabel, `${num(item.pending)} / ${num(item.running)}`, `${date(item.last_success_at)} / ${date(item.last_failure_at)}`, `${num(item.succeeded_1h)} / ${num(item.failed_1h)}`, (item.failure_kinds_24h || []).map(x => `${x.kind} ${num(x.count)}건`).join(" · ") || "없음"]) row.insertCell().textContent = text;
+        }
+        if (!platformData.items.length) { const cell = body.insertRow().insertCell(); cell.colSpan = 7; cell.textContent = "플랫폼 상태 없음"; }
+        $("platform-status").replaceChildren(table);
+      }
+      function chartSeries(key, data) {
+        const make = (key, label, color) => ({ key, label, color, value: b => Number(b[key] || 0) });
+        if (key === "reviews") return [make("new_reviews", "신규 저장 리뷰", seriesColors[0]), make("analyzed_reviews", "분석 완료 리뷰", seriesColors[1])];
+        if (key === "jobs") return [make("collection_succeeded", "수집 작업 성공", seriesColors[0]), make("analysis_done", "분석 작업 완료", seriesColors[1])];
+        if (key === "analysis") return [make("analysis_done", "분석 완료", seriesColors[0]), make("analysis_failed", "분석 실패", "#d03b3b")];
+        const platforms = [...new Set([...(data.platforms || []), ...data.buckets.flatMap(b => Object.keys(b.per_platform || {}))])].sort();
+        for (const platform of platforms) if (!platformColors.has(platform)) platformColors.set(platform, seriesColors[platformColors.size % seriesColors.length]);
+        return platforms.map(platform => ({ key: platform, label: names[platform] || platform, color: platformColors.get(platform), value: b => Number(b.per_platform?.[platform]?.succeeded || 0) }));
+      }
+      function chartTime(bucket, range) {
+        const d = new Date(bucket), two = n => String(n).padStart(2, "0");
+        const hour = `${two(d.getHours())}`;
+        return range === "7d" ? `${two(d.getMonth() + 1)}/${two(d.getDate())} ${hour}시` : range === "24h" ? `${hour}시` : `${hour}:${two(d.getMinutes())}`;
+      }
+      function svgElement(tag, attrs = {}, text) {
+        const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+        for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+        if (text != null) node.textContent = text;
+        return node;
+      }
+      function renderChartTable(state, data, series) {
+        const table = document.createElement("table"), head = table.createTHead().insertRow();
+        for (const text of ["시각", ...series.map(s => s.label), ...(state.key === "platform" ? ["합계"] : [])]) {
+          const cell = document.createElement("th"); cell.textContent = text; head.append(cell);
+        }
+        const body = table.createTBody();
+        data.buckets.forEach((b, i) => {
+          const row = body.insertRow(); row.insertCell().textContent = date(b.bucket) + (i === data.buckets.length - 1 ? " · 진행 중" : "");
+          for (const s of series) row.insertCell().textContent = num(s.value(b));
+          if (state.key === "platform") row.insertCell().textContent = num(series.reduce((total, s) => total + s.value(b), 0));
+        });
+        state.panel.querySelector(".chart-table").replaceChildren(table);
+      }
+      function showChartBucket(state, index) {
+        if (!state.plot) return;
+        const { data, series, svg, x, y, bottom, left, right, width, stacked } = state.plot;
+        state.index = Math.max(0, Math.min(data.buckets.length - 1, index));
+        const bucket = data.buckets[state.index];
+        svg.querySelector(".chart-focus")?.remove();
+        const focus = svgElement("g", { class: "chart-focus", "pointer-events": "none" });
+        focus.append(svgElement("line", { x1: x(state.index), x2: x(state.index), y1: 16, y2: bottom, stroke: "#728097", "stroke-dasharray": "3 3" }));
+        if (!stacked) for (const s of series) focus.append(svgElement("circle", { cx: x(state.index), cy: y(s.value(bucket)), r: 4, fill: s.color, stroke: "white", "stroke-width": 2 }));
+        svg.append(focus);
+        const tooltip = state.panel.querySelector(".chart-tooltip"); tooltip.replaceChildren();
+        const title = document.createElement("div"); title.textContent = date(bucket.bucket) + (state.index === data.buckets.length - 1 ? " · 진행 중" : ""); tooltip.append(title);
+        const rows = [...series.map(s => ({ ...s, amount: s.value(bucket) })), ...(stacked ? [{ label: "합계", amount: series.reduce((total, s) => total + s.value(bucket), 0) }] : [])];
+        for (const s of rows) {
+          const row = document.createElement("div"); row.className = "tooltip-row";
+          if (s.color) { const swatch = document.createElement("i"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.color; row.append(swatch); }
+          const value = document.createElement("strong"); value.textContent = num(s.amount);
+          const label = document.createElement("span"); label.textContent = s.label; row.append(value, label); tooltip.append(row);
+        }
+        tooltip.classList.remove("hidden");
+        const pixelX = x(state.index) / width * state.canvas.clientWidth;
+        tooltip.style.left = Math.max(6, Math.min(state.canvas.clientWidth - tooltip.offsetWidth - 6, pixelX + 12)) + "px";
+      }
+      function hideChartBucket(state) {
+        state.panel.querySelector(".chart-tooltip").classList.add("hidden");
+        state.plot?.svg.querySelector(".chart-focus")?.remove();
+      }
+      function renderChart(state) {
+        if (!visibleChartKeys().includes(state.key)) return;
+        const data = timeseriesCache.get(selectedRange)?.data;
+        if (!data) return;
+        const canvas = state.canvas, tooltip = canvas.querySelector(".chart-tooltip");
+        canvas.querySelector("svg")?.remove();
+        canvas.querySelector(".empty")?.remove(); state.plot = null; tooltip.classList.add("hidden");
+        const series = chartSeries(state.key, data), legend = state.panel.querySelector(".legend"); legend.replaceChildren();
+        for (const s of series) {
+          const item = document.createElement("span"), swatch = document.createElement("i"), label = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.color; label.textContent = s.label; item.append(swatch, label); legend.append(item);
+        }
+        renderChartTable(state, data, series);
+        if (!data.buckets.length) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "해당 기간의 처리 기록이 없습니다."; canvas.append(empty); return; }
+        const width = Math.max(240, canvas.clientWidth), height = 240, left = Math.min(82, Math.max(42, String(Math.max(1, ...data.buckets.map(b => series.reduce((sum, s) => sum + s.value(b), 0)))).length * 7 + 14)), right = width - 14, bottom = 200, top = 16;
+        const stacked = state.key === "platform", n = data.buckets.length, step = (right - left) / n;
+        const maxValue = Math.max(1, ...data.buckets.map(b => stacked ? series.reduce((sum, s) => sum + s.value(b), 0) : Math.max(0, ...series.map(s => s.value(b)))));
+        const magnitude = 10 ** Math.floor(Math.log10(maxValue / 4));
+        const tick = Math.max(1, Math.ceil(maxValue / 4 / magnitude) * magnitude), maximum = tick * 4;
+        const x = i => left + step * (i + .5), y = value => bottom - value / maximum * (bottom - top);
+        const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": state.panel.querySelector("h2").textContent });
+        svg.append(svgElement("title", {}, "좌우 화살표 또는 포인터로 구간별 모든 값을 확인하세요. 마지막 구간은 진행 중입니다."));
+        svg.append(svgElement("rect", { x: left + step * (n - 1), y: top, width: step, height: bottom - top, fill: "#f4f6fa", stroke: "#e6ebf2", "stroke-dasharray": "3 3" }));
+        for (let i = 0; i <= 4; i++) {
+          const value = tick * i, yy = y(value);
+          svg.append(svgElement("line", { x1: left, x2: right, y1: yy, y2: yy, stroke: "#e6ebf2" }));
+          svg.append(svgElement("text", { x: left - 6, y: yy + 4, "text-anchor": "end", fill: "#728097", "font-size": 10 }, num(value)));
+        }
+        if (stacked) data.buckets.forEach((bucket, index) => {
+          const active = series.filter(s => s.value(bucket) > 0), total = active.reduce((sum, s) => sum + s.value(bucket), 0);
+          const barWidth = Math.max(1, Math.min(42, step * .7)), barHeight = bottom - y(total), gap = 2;
+          const clipId = `bar-${state.key}-${index}`, clip = svgElement("clipPath", { id: clipId });
+          // 상단 두 모서리만 둥글게 하고 하단은 기준선에 맞춘다.
+          const bx = x(index) - barWidth / 2, by = y(total), radius = Math.min(4, barWidth / 2, barHeight / 2);
+          clip.append(svgElement("path", { d: `M${bx},${bottom} V${by + radius} Q${bx},${by} ${bx + radius},${by} H${bx + barWidth - radius} Q${bx + barWidth},${by} ${bx + barWidth},${by + radius} V${bottom} Z` })); svg.append(clip);
+          const group = svgElement("g", { "clip-path": `url(#${clipId})` }); let yy = bottom;
+          const usable = Math.max(0, barHeight - gap * Math.max(0, active.length - 1));
+          active.forEach(s => { const h = total ? usable * s.value(bucket) / total : 0; group.append(svgElement("rect", { x: bx, y: yy - h, width: barWidth, height: h, fill: s.color, opacity: index === n - 1 ? .65 : 1 })); yy -= h + gap; }); svg.append(group);
+        });
+        else for (const s of series) {
+          const points = data.buckets.map((b, i) => `${x(i)},${y(s.value(b))}`);
+          if (n > 1) svg.append(svgElement("polyline", { points: points.slice(0, -1).join(" "), fill: "none", stroke: s.color, "stroke-width": 2 }));
+          if (n > 1) svg.append(svgElement("polyline", { points: points.slice(-2).join(" "), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-dasharray": "4 4" }));
+          if (n === 1) svg.append(svgElement("line", { x1: x(0) - 8, x2: x(0) + 8, y1: y(s.value(data.buckets[0])), y2: y(s.value(data.buckets[0])), stroke: s.color, "stroke-width": 2, "stroke-dasharray": "4 4" }));
+        }
+        const labelStep = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((right - left) / (selectedRange === "7d" ? 100 : 65)))));
+        data.buckets.forEach((b, i) => {
+          if (i % labelStep === 0) svg.append(svgElement("text", { x: x(i), y: 222, "text-anchor": "middle", fill: "#728097", "font-size": 10 }, chartTime(b.bucket, selectedRange)));
+        });
+        canvas.prepend(svg); state.plot = { data, series, svg, x, y, bottom, left, right, width, stacked };
+        if (document.activeElement === canvas) showChartBucket(state, state.index);
+      }
+      function renderVisibleCharts() { for (const key of visibleChartKeys()) renderChart(chartStates.get(key)); }
+      function initializeDashboard() {
+        for (const control of document.querySelectorAll(".dashboard-range")) {
+          control.value = selectedRange;
+          control.onchange = e => {
+            selectedRange = e.target.value;
+            for (const select of document.querySelectorAll(".dashboard-range")) select.value = selectedRange;
+            for (const state of chartStates.values()) {
+              state.index = 0;
+              hideChartBucket(state);
+              state.canvas.querySelector("svg")?.remove();
+              state.canvas.querySelector(".empty")?.remove();
+              state.panel.querySelector(".chart-table").replaceChildren();
+              state.panel.querySelector(".chart-error").textContent = "";
+              state.plot = null;
+            }
+            renderVisibleCharts();
+            refreshTimeseries(true);
+          };
+        }
+        for (const panel of document.querySelectorAll("[data-chart]")) {
+          const state = { key: panel.dataset.chart, panel, canvas: panel.querySelector(".chart-canvas"), index: 0, plot: null };
+          chartStates.set(state.key, state);
+          panel.querySelector(".chart-toggle").onclick = e => {
+            const table = panel.querySelector(".chart-table"), shown = table.classList.contains("hidden"); table.classList.toggle("hidden", !shown); state.canvas.classList.toggle("hidden", shown); e.target.textContent = shown ? "그래프로 보기" : "표로 보기"; e.target.setAttribute("aria-expanded", String(shown));
+            if (!shown) renderChart(state);
+          };
+          state.canvas.addEventListener("pointermove", e => {
+            if (!state.plot) return;
+            const rect = state.canvas.getBoundingClientRect(), p = state.plot;
+            const px = (e.clientX - rect.left) / rect.width * p.width;
+            showChartBucket(state, Math.floor((px - p.left) / (p.right - p.left) * p.data.buckets.length));
+          });
+          state.canvas.addEventListener("pointerleave", () => { if (document.activeElement !== state.canvas) hideChartBucket(state); });
+          state.canvas.addEventListener("focus", () => showChartBucket(state, state.index));
+          state.canvas.addEventListener("blur", () => hideChartBucket(state));
+          state.canvas.addEventListener("keydown", e => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) || !state.plot) return;
+            e.preventDefault(); showChartBucket(state, e.key === "Home" ? 0 : e.key === "End" ? state.plot.data.buckets.length - 1 : state.index + (e.key === "ArrowLeft" ? -1 : 1));
+          });
+          if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => { if (visibleChartKeys().includes(state.key) && state.canvas.clientWidth > 0) renderChart(state); }).observe(state.canvas);
+        }
+        window.addEventListener("hashchange", () => switchTab(location.hash.slice(1)));
+        switchTab(location.hash.slice(1) || "overview");
+        setInterval(() => refreshTimeseries(true), 60000);
+        setInterval(() => { if (tab === "collection" && !document.hidden) refreshPlatforms(); }, 30000);
+      }
+      initializeDashboard();
       refreshLive();
       refreshSlow();
       loadAnalysisFailures();
