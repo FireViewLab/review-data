@@ -147,10 +147,10 @@ async def platform_status(session, settings: Settings, labels: dict[str, str]) -
     items = []
     for platform in names:
         row = rows.get(platform)
-        if row is None and platform not in labels:
-            continue
         if platform in excluded:
             state = "excluded"
+        elif row is None:
+            state = "inactive"  # 등록만 되어 있고 수집한 적 없는 플랫폼
         elif platform in paused:
             state = "paused"
         elif platform in probing:

@@ -133,7 +133,13 @@ async def test_platform_status_states_and_failure_kinds(session):
     )
     await session.flush()
     settings = Settings(_env_file=None, schedule_excluded_platforms="coupang")
-    labels = {"kurly": "컬리", "oliveyoung": "올리브영", "musinsa": "무신사", "coupang": "쿠팡"}
+    labels = {
+        "kurly": "컬리",
+        "oliveyoung": "올리브영",
+        "musinsa": "무신사",
+        "coupang": "쿠팡",
+        "gmarket": "G마켓",
+    }
     items = {i["platform"]: i for i in (await platform_status(session, settings, labels))["items"]}
     assert items["kurly"]["state"] == "normal" and items["kurly"]["succeeded_1h"] == 1
     assert (
@@ -143,6 +149,8 @@ async def test_platform_status_states_and_failure_kinds(session):
     assert items["musinsa"]["state"] == "probing" and items["musinsa"]["pending"] == 1
     assert items["musinsa"]["failure_kinds_24h"] == [{"kind": "blocked", "count": 1}]
     assert items["coupang"]["state"] == "excluded" and items["coupang"]["label"] == "쿠팡"
+    # 수집 이력이 없는 플랫폼은 정상이 아니라 미수집이다.
+    assert items["gmarket"]["state"] == "inactive" and items["gmarket"]["pending"] == 0
     assert "429" not in str(items)
 
 
