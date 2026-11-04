@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # PostgreSQL 접속 정보 (환경변수 DATABASE_URL 로 덮어쓸 수 있음)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/review_data"
+    # 연결을 이 시간(초)만 쓰고 새로 맺는다. 오래 쓴 연결은 DB 서버 쪽 메모리가 계속 늘어
+    # 1GB 제한에서 하루 1~2번 OOM으로 모든 연결이 끊겼다.
+    database_pool_recycle_seconds: int = Field(default=30 * 60, ge=60)
 
     # Spring·AI 등 내부 서버만 API를 호출하도록 공유하는 토큰. 로컬 개발에서는
     # 값을 비워 기존처럼 인증 없이 쓸 수 있다.
