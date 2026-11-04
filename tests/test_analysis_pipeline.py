@@ -737,3 +737,99 @@ async def test_legacy_full_result_reused_and_oversized_failure_replaced(session_
         assert replacement != oversized
         assert (await s.get(AnalysisJob, replacement)).status == "queued"
         assert (await s.get(AnalysisJob, replacement)).input_review_count == 500
+
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_outage_guard_pauses_probes_and_backs_off():
+    from review_data.worker.analysis_worker import OutageGuard
+
+    clock = Clock()
+    guard = OutageGuard(
+        config(
+            ai_outage_failure_threshold=3,
+            ai_outage_pause_seconds=60,
+            ai_outage_max_pause_seconds=200,
+        ),
+        clock=clock,
+    )
+    guard.record(True)
+    guard.record(True)
+    assert guard.wait_seconds() == 0
+    guard.record(True)
+    assert guard.wait_seconds() == 60
+    # 기다린 뒤 확인 요청 한 건이 또 실패하면 두 배로, 상한까지만 늘린다.
+    clock.now = 60
+    assert guard.wait_seconds() == 0
+    guard.record(True)
+    assert guard.wait_seconds() == 120
+    clock.now = 180
+    guard.record(True)
+    assert guard.wait_seconds() == 200
+    # 한 번 성공하면 처음 상태로 돌아간다.
+    clock.now = 380
+    guard.record(False)
+    guard.record(True)
+    guard.record(True)
+    assert guard.wait_seconds() == 0
+    guard.record(True)
+    assert guard.wait_seconds() == 60
+
+
+@pytest.mark.parametrize(
+    "error,outage",
+    [
+        (AnalysisStreamError("x", retryable=True, kind="http"), True),
+        (AnalysisStreamError("x", retryable=True, kind="transport"), True),
+        (TimeoutError(), True),
+        (AnalysisStreamError("x", retryable=False, kind="http"), False),
+        (AnalysisStreamError("x", retryable=True, kind="conflict"), False),
+        (AnalysisStreamError("x", retryable=True), False),
+    ],
+)
+async def test_run_once_reports_only_ai_outages_to_guard(session_factory, error, outage):
+    from review_data.worker.analysis_worker import OutageGuard
+
+    await seed(session_factory)
+    guard = OutageGuard(config(ai_outage_failure_threshold=1))
+
+    async def fail(kwargs):
+        raise error
+
+    await run_once(session_factory, "w", settings=config(), client=Client(fail), guard=guard)
+    assert (guard.wait_seconds() > 0) is outage
+
+
+async def test_run_forever_stops_claiming_during_outage(session_factory, monkeypatch):
+    from review_data.worker import analysis_worker
+
+    job = await seed(session_factory)
+    calls = []
+
+    async def outage(*args, guard, **kwargs):
+        calls.append(1)
+        guard.record(True)
+        return True
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(analysis_worker, "run_once", outage)
+    monkeypatch.setattr(analysis_worker.asyncio, "sleep", fake_sleep)
+    settings = config(ai_outage_failure_threshold=2, ai_outage_pause_seconds=300)
+    with pytest.raises(asyncio.CancelledError):
+        await analysis_worker.run_forever(session_factory, "w", settings=settings, poll_interval=5)
+    # 연속 2건 실패 뒤에는 작업을 꺼내지 않고 기다리기만 한다.
+    assert len(calls) == 2 and sleeps == [5, 5, 5]
+    async with session_factory() as s:
+        assert (await s.get(AnalysisJob, job)).status == "queued"
