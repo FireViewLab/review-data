@@ -23,7 +23,13 @@ class Base(DeclarativeBase):
 
 
 def create_engine() -> AsyncEngine:
-    return create_async_engine(get_settings().database_url)
+    settings = get_settings()
+    # DB가 재시작되면 풀에 남은 연결은 끊긴 상태라 쓰기 전에 확인한다.
+    return create_async_engine(
+        settings.database_url,
+        pool_recycle=settings.database_pool_recycle_seconds,
+        pool_pre_ping=True,
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
