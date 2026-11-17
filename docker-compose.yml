@@ -59,6 +59,8 @@ services:
       migrate:
         condition: service_completed_successfully
     shm_size: 1gb
+    # Chromium 이 남긴 자식 프로세스를 init 이 거둔다. 없으면 좀비가 쌓여 브라우저를 못 띄운다.
+    init: true
     mem_limit: 1g
 
   worker:
@@ -78,6 +80,9 @@ services:
     shm_size: 1gb
     # 워커는 Ctrl+C(SIGINT)를 받아야 DB 연결을 정리하고 끝난다.
     stop_signal: SIGINT
+    # 워커가 PID 1 이면 종료된 Chromium 프로세스를 거두지 못해 좀비가 쌓이고, 프로세스 한도에
+    # 닿으면 브라우저 수집이 모두 실패한다(11/11). init 이 PID 1 로 좀비를 거두고 신호를 넘긴다.
+    init: true
     mem_limit: 2g
 
   analysis-worker:

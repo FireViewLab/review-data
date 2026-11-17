@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -13,6 +14,49 @@ from review_data.core.db.pipeline_control import analysis_stopped
 from review_data.core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+# AI 서버가 응답하지 못한 실패. 응답 검증 실패나 처리 중 충돌은 AI가 살아 있다는 뜻이다.
+OUTAGE_KINDS = ("http", "transport", "timeout")
+
+
+class OutageGuard:
+    """AI 서버 장애가 이어지면 요청을 잠시 멈춘다. 워커 프로세스마다 따로 판단한다."""
+
+    def __init__(self, settings: Settings, clock=time.monotonic):
+        self.threshold = settings.ai_outage_failure_threshold
+        self.base_pause = settings.ai_outage_pause_seconds
+        self.max_pause = max(settings.ai_outage_max_pause_seconds, self.base_pause)
+        self.clock = clock
+        self.failures = 0
+        self.pause = self.base_pause
+        self.until = 0.0
+        self.tripped = False
+
+    def wait_seconds(self) -> float:
+        return max(self.until - self.clock(), 0.0)
+
+    def record(self, outage: bool) -> None:
+        if not outage:
+            if self.tripped:
+                logger.info("AI 서버 응답 회복: 분석 요청을 다시 보낸다.")
+            self.tripped = False
+            self.failures = 0
+            self.pause = self.base_pause
+            return
+        self.failures += 1
+        if self.failures < self.threshold:
+            return
+        self.until = self.clock() + self.pause
+        self.tripped = True
+        logger.warning(
+            "AI 서버 장애가 이어져 분석 요청을 %d초 멈춘다 (연속 실패 %d건)",
+            self.pause,
+            self.failures,
+        )
+        self.pause = min(self.pause * 2, self.max_pause)
+        # 기다린 뒤에는 한 건만 보내 보고, 그것도 실패하면 바로 다시 멈춘다.
+        self.failures = self.threshold - 1
 
 
 async def _heartbeat(factory, claim, worker_id, lease_seconds):
@@ -33,6 +77,7 @@ async def run_once(
     lease_seconds: float = 60,
     client=None,
     backfill_only: bool = False,
+    guard: OutageGuard | None = None,
 ) -> bool:
     settings = settings or get_settings()
     if not settings.ai_analysis_enabled:
@@ -107,6 +152,8 @@ async def run_once(
         async with factory() as session:
             await AnalysisRepository(session).complete(claim, worker_id, response, settings)
             await session.commit()
+        if guard is not None:
+            guard.record(False)
     except (AnalysisStreamError, TimeoutError, SQLAlchemyError) as exc:
         retryable = not isinstance(exc, AnalysisStreamError) or exc.retryable
         if isinstance(exc, AnalysisStreamError):
@@ -121,9 +168,9 @@ async def run_once(
                 claim["id"], worker_id, retryable, kind, min_delay
             )
             await session.commit()
-        logger.warning(
-            "분석 작업 %s 처리 실패 (원인=%s, 재시도=%s)", claim["id"], kind, retryable
-        )
+        logger.warning("분석 작업 %s 처리 실패 (원인=%s, 재시도=%s)", claim["id"], kind, retryable)
+        if guard is not None:
+            guard.record(retryable and kind in OUTAGE_KINDS)
     except Exception:  # noqa: BLE001
         async with factory() as session:
             await AnalysisRepository(session).fail(claim["id"], worker_id, False)
@@ -149,6 +196,7 @@ async def run_forever(
     settings = settings or get_settings()
     if not settings.ai_analysis_enabled:
         logger.info("분석 연결 비활성화: AI 설정과 계약 확정 후 활성화한다.")
+    guard = OutageGuard(settings)
     while True:
         try:
             from review_data.core.service.analysis_refresh import AnalysisRefreshService
@@ -158,9 +206,13 @@ async def run_forever(
                 await session.commit()
         except Exception:
             logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
+        # 장애로 멈춘 동안에는 작업을 꺼내지 않아 대기 작업의 시도 횟수가 그대로 남는다.
+        if wait := guard.wait_seconds():
+            await asyncio.sleep(min(wait, poll_interval))
+            continue
         try:
             processed = await run_once(
-                factory, worker_id, settings=settings, backfill_only=backfill_only
+                factory, worker_id, settings=settings, backfill_only=backfill_only, guard=guard
             )
         except Exception:  # noqa: BLE001
             logger.warning("분석 워커 처리 실패: 다음 주기에 다시 확인한다.")

@@ -16,10 +16,12 @@ WORKDIR /app
 # 의존성과 Chromium 은 소스보다 훨씬 드물게 바뀐다. 먼저 설치해 두면 코드만 고친
 # 빌드에서는 이 무거운 레이어(수백 MB)를 캐시에서 재사용한다.
 COPY pyproject.toml ./
-RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']))" > requirements.txt \
+#
+# Playwright 의 node 드라이버는 libatomic 이 있어야 실행된다. slim 이미지에는 없어서 먼저 설치한다.
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 xvfb \
+    && python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']))" > requirements.txt \
     && pip install -r requirements.txt \
     && playwright install --with-deps chromium \
-    && apt-get update && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY seeds.toml ./seeds.toml

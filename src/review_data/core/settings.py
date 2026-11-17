@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # PostgreSQL 접속 정보 (환경변수 DATABASE_URL 로 덮어쓸 수 있음)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/review_data"
+    # 연결을 이 시간(초)만 쓰고 새로 맺는다. 오래 쓴 연결은 DB 서버 쪽 메모리가 계속 늘어
+    # 1GB 제한에서 하루 1~2번 OOM으로 모든 연결이 끊겼다.
+    database_pool_recycle_seconds: int = Field(default=30 * 60, ge=60)
 
     # Spring·AI 등 내부 서버만 API를 호출하도록 공유하는 토큰. 로컬 개발에서는
     # 값을 비워 기존처럼 인증 없이 쓸 수 있다.
@@ -110,6 +113,12 @@ class Settings(BaseSettings):
     analysis_reanalysis_share: float = Field(default=0.25, ge=0, le=1)
     ai_model_version: str | None = None
     ai_policy_version: str | None = None
+    # AI 서버 장애(5xx·429, 연결 실패, 시간 초과)가 이 횟수만큼 이어지면 워커가 요청을 멈춘다.
+    # 장애 중에도 계속 보내면 대기 작업이 시도 횟수를 다 써서 실패로 끝난다(11/3 503 장애 때
+    # 하루 만에 9,500건). 멈춘 시간이 지나면 한 건만 보내 확인하고, 실패하면 대기를 두 배로 늘린다.
+    ai_outage_failure_threshold: int = Field(default=5, ge=1)
+    ai_outage_pause_seconds: float = Field(default=300, gt=0)
+    ai_outage_max_pause_seconds: float = Field(default=1800, gt=0)
 
     @field_validator("collection_platform_intervals")
     @classmethod
