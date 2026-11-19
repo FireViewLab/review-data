@@ -957,3 +957,21 @@ async def test_snapshot_sends_image_count_and_old_input_is_reanalyzed(session_fa
         again = await AnalysisRepository(s).enqueue("kurly", "p", config())
         await s.commit()
     assert again not in (old, job)
+
+
+async def test_complete_reuses_product_hash_when_reviews_unchanged(session_factory, monkeypatch):
+    await seed(session_factory)
+    calls = []
+    original = AnalysisRepository.snapshot
+
+    async def counted(self, platform, product_id):
+        calls.append(product_id)
+        return await original(self, platform, product_id)
+
+    monkeypatch.setattr(AnalysisRepository, "snapshot", counted)
+    assert await run_once(session_factory, "w", settings=config(), client=Client())
+    # 수집이 리뷰를 바꾸지 않았으므로 저장 단계에서 스냅샷을 다시 만들지 않는다.
+    assert calls == []
+    async with session_factory() as s:
+        status = await AnalysisRepository(s).status("kurly", "p", config())
+    assert status["status"] == "done" and len(status["results"]) == 2

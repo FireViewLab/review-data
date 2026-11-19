@@ -19,14 +19,16 @@ def representative_reviews(platform: str, product_id: str):
             ReviewRow,
             func.row_number()
             .over(
+                # 같은 값끼리 묶기만 하므로 로캘 순서가 필요 없다. 바이트 비교로 정렬하면
+                # 긴 본문을 en_US.utf8 규칙으로 정렬하는 것보다 몇 배 빠르고 묶이는 결과는 같다.
                 partition_by=[
-                    ReviewRow.content,
+                    ReviewRow.content.collate("C"),
                     ReviewRow.rating,
-                    ReviewRow.author,
+                    ReviewRow.author.collate("C"),
                     ReviewRow.written_at,
-                    ReviewRow.option,
+                    ReviewRow.option.collate("C"),
                     ReviewRow.images,
-                    case((known, None), else_=ReviewRow.review_id),
+                    case((known, None), else_=ReviewRow.review_id).collate("C"),
                 ],
                 # 처음 저장된 ID를 유지한다. 이후 작은 ID가 추가돼도 바뀌지 않는다.
                 order_by=[ReviewRow.first_collected_at, ReviewRow.review_id],
