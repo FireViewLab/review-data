@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert
 
 from review_data.api.v1 import SessionDep
 from review_data.core.db.analysis_control import control_status, effective_analysis_settings
@@ -24,7 +25,7 @@ from review_data.core.db.analysis_repository import (
     latest_recovery,
     recover_failures,
 )
-from review_data.core.db.models import AnalysisRefreshControl
+from review_data.core.db.models import AnalysisNode, AnalysisRefreshControl
 from review_data.core.db.pipeline_control import pipeline_state, set_paused
 from review_data.core.service.analysis_refresh import (
     AnalysisRefreshService,
@@ -199,6 +200,58 @@ async def pipeline_action(
     return _pipeline_payload(state)
 
 
+# 분석 PC는 10초마다 보낸다. 세 번 연속 빠지면 오프라인으로 본다.
+NODE_ALIVE_SECONDS = 35
+
+
+class GpuMetrics(BaseModel):
+    name: str = Field(max_length=100)
+    utilization_percent: float = Field(ge=0, le=100)
+    memory_used_mb: float = Field(ge=0)
+    memory_total_mb: float = Field(ge=0)
+    temperature_c: float | None = Field(default=None, ge=0, le=150)
+    power_w: float | None = Field(default=None, ge=0)
+
+
+class NodeMetrics(BaseModel):
+    """분석 PC가 보내는 지표. 화면에 보일 값만 받는다."""
+
+    node_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    gpus: list[GpuMetrics] = Field(default_factory=list, max_length=8)
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    cpu_count: int | None = Field(default=None, ge=1)
+    memory_used_mb: float | None = Field(default=None, ge=0)
+    memory_total_mb: float | None = Field(default=None, ge=0)
+    ai_workers: int | None = Field(default=None, ge=0)
+    in_flight: int | None = Field(default=None, ge=0)
+    requests_per_minute: float | None = Field(default=None, ge=0)
+    errors_5m: int | None = Field(default=None, ge=0)
+    model_version: str | None = Field(default=None, max_length=200)
+    uptime_seconds: float | None = Field(default=None, ge=0)
+
+
+@router.post("/node-metrics")
+async def node_metrics(body: NodeMetrics, request: Request, session: SessionDep):
+    """분석 PC 지표를 받는다. 대시보드 세션이 아니라 AI 내부 토큰으로 인증한다."""
+    expected = get_settings().ai_internal_token
+    supplied = request.headers.get("x-internal-token", "")
+    if expected is None or not secrets.compare_digest(
+        supplied.encode(), expected.get_secret_value().encode()
+    ):
+        raise HTTPException(401, "유효한 X-Internal-Token이 필요합니다.")
+    metrics = body.model_dump(exclude={"node_id"})
+    now = datetime.now(UTC)
+    await session.execute(
+        insert(AnalysisNode)
+        .values(node_id=body.node_id, reported_at=now, metrics=metrics)
+        .on_conflict_do_update(
+            index_elements=[AnalysisNode.node_id], set_={"reported_at": now, "metrics": metrics}
+        )
+    )
+    await session.commit()
+    return {"ok": True}
+
+
 @router.get("/api/analysis/failures")
 async def analysis_failures(
     session: SessionDep, hours: Annotated[int, Query(ge=1, le=168)] = 24
@@ -320,7 +373,10 @@ async def build_live(app, session) -> dict:
               AS ai_claimed_reviews,
             (SELECT coalesce(sum(input_review_count),0) FROM analysis_jobs
               WHERE completed_at>=now()-interval '15 min' AND status='done')
-              AS ai_completed_reviews
+              AS ai_completed_reviews,
+            (SELECT count(*) FROM analysis_jobs
+              WHERE completed_at>=now()-interval '15 min' AND status='done')
+              AS ai_completed_products
     """,
         )
     )[0]
@@ -336,13 +392,27 @@ async def build_live(app, session) -> dict:
             (SELECT json_agg(json_build_object('id',j.id,'platform',j.platform,
                      'product_id',j.product_id,'input_review_count',j.input_review_count,
                      'lease_expires_at',j.lease_expires_at))
-             FROM analysis_jobs j WHERE j.locked_by=w.worker_id AND j.status='running')
+             FROM analysis_jobs j WHERE j.status='running'
+                AND (j.locked_by=w.worker_id OR j.locked_by LIKE w.worker_id || '-%'))
               AS analysis_jobs
         FROM worker_heartbeats w WHERE w.stopped_at IS NULL
             AND w.last_seen_at>now()-interval '5 minutes'
         ORDER BY w.role,w.last_seen_at DESC
     """,
     )
+    result["analysis_nodes"] = [
+        {
+            "node_id": node.node_id,
+            "reported_at": node.reported_at.isoformat(),
+            "alive": node.reported_at > datetime.now(UTC) - timedelta(seconds=NODE_ALIVE_SECONDS),
+            **node.metrics,
+        }
+        for node in await session.scalars(
+            select(AnalysisNode)
+            .where(AnalysisNode.reported_at > datetime.now(UTC) - timedelta(days=1))
+            .order_by(AnalysisNode.node_id)
+        )
+    ]
     result["analysis_control"] = await control_status(session, settings)
     result["analysis_campaigns"] = await campaign_status(
         session, enabled=settings.analysis_refresh_enabled

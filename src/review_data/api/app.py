@@ -71,6 +71,9 @@ async def require_internal_token(
         return
     if request.url.path in {"/status/login", "/status/logout"} and request.method == "POST":
         return
+    # 분석 PC는 Data 토큰이 아니라 AI 내부 토큰을 가지므로 엔드포인트에서 따로 확인한다.
+    if request.url.path == "/status/node-metrics" and request.method == "POST":
+        return
     if request.url.path.startswith("/status/api/") and status.valid_session(
         request, expected_token
     ):

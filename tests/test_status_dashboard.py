@@ -518,3 +518,56 @@ async def test_consolidated_collection_counts_include_zero_and_reobserved_platfo
             {"platform": "test-b", "products": 1, "reviews": 1},
             {"platform": "test-empty", "products": 1, "reviews": 0},
         ]
+
+
+NODE = {
+    "node_id": "gpu-pc",
+    "gpus": [
+        {
+            "name": "RTX",
+            "utilization_percent": 95,
+            "memory_used_mb": 4745,
+            "memory_total_mb": 16311,
+            "temperature_c": 61,
+            "power_w": 150,
+        }
+    ],
+    "cpu_percent": 30.5,
+    "cpu_count": 14,
+    "memory_used_mb": 6000,
+    "memory_total_mb": 23000,
+    "ai_workers": 4,
+    "in_flight": 16,
+    "requests_per_minute": 25,
+    "errors_5m": 0,
+    "model_version": "m1",
+}
+
+
+def test_analysis_node_reports_with_ai_token_and_appears_in_live(engine, monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        database_url=get_settings().database_url,
+        internal_token="data-only-secret",
+        ai_internal_token="ai-secret",
+    )
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(status, "get_settings", lambda: settings)
+    with TestClient(module.app) as client:
+        url = "/status/node-metrics"
+        assert client.post(url, json=NODE).status_code == 401
+        headers = {"X-Internal-Token": "data-only-secret"}
+        assert client.post(url, json=NODE, headers=headers).status_code == 401
+        headers = {"X-Internal-Token": "ai-secret"}
+        bad = {**NODE, "cpu_percent": 101}
+        assert client.post(url, json=bad, headers=headers).status_code == 422
+        assert client.post(url, json=NODE, headers=headers).status_code == 200
+        assert client.post(url, json={**NODE, "in_flight": 3}, headers=headers).status_code == 200
+        # 같은 토큰으로 대시보드 API는 열리지 않는다.
+        assert client.get("/status/api/live", headers=headers).status_code == 401
+        client.post("/status/login", json={"token": "data-only-secret"})
+        live = client.get("/status/api/live").json()
+    [node] = [n for n in live["analysis_nodes"] if n["node_id"] == "gpu-pc"]
+    assert node["alive"] is True and node["in_flight"] == 3
+    assert node["gpus"][0]["utilization_percent"] == 95
+    assert "ai_completed_products" in live["rates_15m"]

@@ -877,6 +877,17 @@
         </div>
       </section>
       <section id="analysis-view" class="hidden">
+        <div class="panel" style="margin-bottom: 20px">
+          <h2>
+            분석 PC
+          </h2>
+          <p class="sub">
+            외부 GPU 분석 서버가 10초마다 보내는 처리 현황과 자원 사용률입니다.
+            35초 넘게 소식이 없으면 오프라인으로 표시합니다.
+          </p>
+          <div id="analysis-nodes">
+          </div>
+        </div>
         <div class="panel">
           <h2>
             AI 분석 요청 제어
@@ -1515,8 +1526,48 @@
           `</div>`
         );
       }
+      function nodePanel(n, rate) {
+        const gpu = (n.gpus || [])[0],
+          mem = n.memory_total_mb ? (100 * n.memory_used_mb) / n.memory_total_mb : null,
+          vram = gpu && gpu.memory_total_mb ? (100 * gpu.memory_used_mb) / gpu.memory_total_mb : null;
+        const head = `<div class="detail-meta"><strong>${esc(n.node_id)}</strong>${gpu ? `<span>${esc(gpu.name)}</span>` : ""}${n.model_version ? `<span>${esc(n.model_version)}</span>` : ""}<span class="pill ${n.alive ? "alive" : "offline"}">${n.alive ? "온라인" : "오프라인"}</span><span>마지막 보고 ${date(n.reported_at)}</span></div>`;
+        const perHour = rate != null ? Math.round(rate * 4) : null;
+        return (
+          head +
+          `<div class="cards" style="margin-top:12px">` +
+          card(
+            "분석 처리량",
+            perHour == null ? "—" : num(perHour) + "<small style=\"font-size:14px\"> 상품/시간</small>",
+            `최근 15분 완료 ${num(rate ?? 0)}개 · 요청 ${n.requests_per_minute == null ? "—" : num(Math.round(n.requests_per_minute))}/분`,
+          ) +
+          card(
+            "처리 중 요청",
+            n.in_flight == null ? "—" : num(n.in_flight),
+            `AI 프로세스 ${n.ai_workers ?? "—"}개 · 최근 5분 오류 ${num(n.errors_5m ?? 0)}건`,
+          ) +
+          card(
+            "GPU 사용률",
+            gpu ? Math.round(gpu.utilization_percent) + "%" : "—",
+            gpu
+              ? `VRAM ${(gpu.memory_used_mb / 1024).toFixed(1)} / ${(gpu.memory_total_mb / 1024).toFixed(1)}GB${gpu.temperature_c != null ? " · " + Math.round(gpu.temperature_c) + "℃" : ""}${gpu.power_w != null ? " · " + Math.round(gpu.power_w) + "W" : ""}`
+              : "GPU 정보 없음",
+            gpu ? gpu.utilization_percent : null,
+          ) +
+          card(
+            "CPU · 메모리",
+            n.cpu_percent == null ? "—" : Math.round(n.cpu_percent) + "%",
+            `${n.cpu_count ?? "—"}코어 · 메모리 ${mem == null ? "—" : Math.round(mem) + "%"} (${n.memory_total_mb ? ((n.memory_used_mb || 0) / 1024).toFixed(1) + " / " + (n.memory_total_mb / 1024).toFixed(1) + "GB" : "—"})${vram == null ? "" : " · VRAM " + Math.round(vram) + "%"}`,
+            n.cpu_percent,
+          ) +
+          `</div>`
+        );
+      }
       function renderOverview(d) {
         overviewData = d;
+        const nodes = d.analysis_nodes || [];
+        $("analysis-nodes").innerHTML = nodes.length
+          ? nodes.map((n) => nodePanel(n, d.rates_15m?.ai_completed_products)).join("")
+          : `<div class="sub">연결된 분석 PC가 없습니다. 분석 PC에서 지표 전송 스크립트를 실행해 주세요.</div>`;
         const control = d.analysis_control;
         $("refresh-control").textContent = control
           ? `현재 목표: ${control.model_version || "미설정"} / ${control.policy_version || "미설정"} · ${control.source === "dashboard" ? "화면에서 저장한 설정" : "서버 설정"} · ${control.enabled ? "자동 예약 활성화" : "자동 예약 중지"}`
