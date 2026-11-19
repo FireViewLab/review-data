@@ -259,6 +259,16 @@ class ReviewAnalysisRow(Base):
         CheckConstraint("rti BETWEEN 0 AND 100", name="ck_review_analyses_rti"),
         CheckConstraint("level IN ('safe','warn','danger')", name="ck_review_analyses_level"),
         CheckConstraint("array_position(reasons, NULL) IS NULL", name="ck_review_analyses_reasons"),
+        CheckConstraint(
+            "policy_index_v3 BETWEEN 0 AND 100", name="ck_review_analyses_policy_index_v3"
+        ),
+        CheckConstraint(
+            "evidence_level_v3 IN ('SAFE','WARN','DANGER')",
+            name="ck_review_analyses_evidence_level_v3",
+        ),
+        CheckConstraint(
+            "reason_source IN ('groq','python','rules')", name="ck_review_analyses_reason_source"
+        ),
         Index(
             "idx_review_analyses_review",
             "platform",
@@ -278,6 +288,13 @@ class ReviewAnalysisRow(Base):
     behavior_score: Mapped[Decimal | None] = mapped_column(Numeric)
     network_score: Mapped[Decimal | None] = mapped_column(Numeric)
     reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # v2 계약(v3.1 모델) 결과. 정책 지수는 RTI와 의미가 달라 rti·level에 넣지 않는다.
+    policy_index_v3: Mapped[Decimal | None] = mapped_column(Numeric)
+    evidence_level_v3: Mapped[str | None] = mapped_column(Text)
+    analysis_summary_ko: Mapped[str | None] = mapped_column(Text)
+    rules_reasons_ko: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    evidence_reasons_v3: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    reason_source: Mapped[str | None] = mapped_column(Text)
     model_version: Mapped[str | None] = mapped_column(Text)
     input_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

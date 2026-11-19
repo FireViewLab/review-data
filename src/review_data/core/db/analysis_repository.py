@@ -439,7 +439,11 @@ class AnalysisRepository:
             )
         job.model_version = response.model_version
         job.policy_version = response.policy_version
-        job.result = {"review_count": len(results), "ai_job_id": response.ai_job_id}
+        job.result = {
+            "review_count": len(results),
+            "ai_job_id": response.ai_job_id,
+            "contract_version": response.contract_version,
+        }
         job.status = "done"
         job.completed_at = datetime.now(UTC)
         job.lease_expires_at = None
@@ -515,6 +519,12 @@ class AnalysisRepository:
                         "behavior_score": _number(r.behavior_score),
                         "network_score": _number(r.network_score),
                         "reasons": r.reasons,
+                        "policy_index_v3": _number(r.policy_index_v3),
+                        "evidence_level_v3": r.evidence_level_v3,
+                        "analysis_summary_ko": r.analysis_summary_ko,
+                        "rules_reasons_ko": r.rules_reasons_ko,
+                        "evidence_reasons_v3": r.evidence_reasons_v3,
+                        "reason_source": r.reason_source,
                     }
                 )
         sampling = sampling_info(job)
@@ -531,6 +541,7 @@ class AnalysisRepository:
             "input_hash": job.input_hash,
             "model_version": job.model_version,
             "policy_version": job.policy_version,
+            "contract_version": contract_version(job),
             "review_count": job.input_review_count or 0,
             "results": results,
         }
@@ -538,6 +549,13 @@ class AnalysisRepository:
 
 def _number(value):
     return float(value) if value is not None else None
+
+
+def contract_version(job: AnalysisJob) -> str | None:
+    """결과를 받은 계약. v2 이전 결과에는 기록이 없어 v0.5로 본다."""
+    if job.result is None:
+        return None
+    return job.result.get("contract_version", "v0.5")
 
 
 def public_job(job: AnalysisJob) -> dict:

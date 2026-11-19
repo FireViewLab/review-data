@@ -19,6 +19,15 @@ from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRo
 
 from .conftest import DATABASE_URL
 
+V2_COLUMNS = {
+    "policy_index_v3",
+    "evidence_level_v3",
+    "analysis_summary_ko",
+    "rules_reasons_ko",
+    "evidence_reasons_v3",
+    "reason_source",
+}
+
 
 async def _seed(session):
     for platform, product in [("kurly", "p1"), ("kurly", "p2"), ("naver", "p1")]:
@@ -204,9 +213,10 @@ async def test_migration_round_trip_preserves_existing_data(engine):
                         revisions[-1].module.upgrade()
                         inspector = inspect(sync_conn)
                         columns = inspector.get_columns("review_analyses")
+                        # 이 리비전 뒤에 더한 v2 결과 컬럼은 아직 없다.
                         assert {c["name"] for c in columns} == set(
                             ReviewAnalysisRow.__table__.columns.keys()
-                        )
+                        ) - V2_COLUMNS
                         assert inspector.get_pk_constraint("review_analyses")[
                             "constrained_columns"
                         ] == ["analysis_job_id", "review_id"]

@@ -1,4 +1,4 @@
-"""제안된 분석 SSE 계약을 검증한다. 정상 done 및 EOF 전에는 결과를 반환하지 않는다."""
+"""분석 SSE 계약(v0.5·v2)을 검증한다. 정상 done 및 EOF 전에는 결과를 반환하지 않는다."""
 
 import json
 import math
@@ -12,6 +12,18 @@ import httpx
 MAX_FRAME_BYTES = 1024 * 1024
 _SCORES = ("rti", "text_score", "behavior_score", "network_score")
 _RESULT_FIELDS = {"review_id", "level", "reasons", *_SCORES}
+# v2 계약은 RTI 대신 정책 지수·등급과 한국어 설명을 준다. 원 점수 세 개는 v0.5와 같다.
+_V2_SCORES = ("policy_index_v3", "text_score", "behavior_score", "network_score")
+_V2_RESULT_FIELDS = {
+    "review_id",
+    "evidence_level_v3",
+    "analysis_summary_ko",
+    "rules_reasons_ko",
+    "evidence_reasons_v3",
+    "reason_source",
+    *_V2_SCORES,
+}
+CONTRACTS = ("v0.5", "v2")
 
 
 class AnalysisStreamError(Exception):
@@ -29,6 +41,7 @@ class AnalysisStreamResult:
     model_version: str | None = None
     policy_version: str | None = None
     ai_job_id: str | None = None
+    contract_version: str = "v0.5"
 
 
 def _nonempty(value: object, field: str) -> str:
@@ -54,7 +67,7 @@ def _number(value: object, field: str) -> Decimal | None:
     return number
 
 
-def _reviews(reviews: list[dict]) -> list[dict]:
+def _reviews(reviews: list[dict], contract: str = "v0.5") -> list[dict]:
     if not isinstance(reviews, list) or not reviews:
         raise AnalysisStreamError("reviews must be a nonempty list")
     payload = []
@@ -76,14 +89,19 @@ def _reviews(reviews: list[dict]) -> list[dict]:
             written_at = written_at.isoformat()
         elif written_at is not None and not isinstance(written_at, str):
             raise AnalysisStreamError("written_at must be a datetime, string or null")
-        payload.append(
-            {
-                "review_id": review_id,
-                "content": content,
-                "rating": json_rating,
-                "written_at": written_at,
-            }
-        )
+        row = {
+            "review_id": review_id,
+            "content": content,
+            "rating": json_rating,
+            "written_at": written_at,
+        }
+        if contract == "v2":
+            # 0은 사진이 없다고 확인한 경우만이다. 확인하지 못했으면 null로 보낸다.
+            image_count = item.get("image_count")
+            if image_count is not None and (type(image_count) is not int or image_count < 0):
+                raise AnalysisStreamError("image_count must be a nonnegative integer or null")
+            row["image_count"] = image_count
+        payload.append(row)
     return payload
 
 
@@ -222,6 +240,52 @@ def _result(item: dict, ids: set[str]) -> dict:
     return {"review_id": review_id, **scores, "level": level, "reasons": list(reasons)}
 
 
+def _strings(item: dict, field: str) -> list[str]:
+    value = item[field]
+    if not isinstance(value, list) or any(not isinstance(text, str) for text in value):
+        raise AnalysisStreamError(f"{field} must be a list of strings")
+    return list(value)
+
+
+def _result_v2(item: dict, ids: set[str]) -> dict:
+    if not _V2_RESULT_FIELDS.issubset(item):
+        raise AnalysisStreamError("result is missing required fields")
+    review_id = _nonempty(item["review_id"], "result review_id")
+    if review_id not in ids:
+        raise AnalysisStreamError("result review_id is outside request")
+    scores = {}
+    for field in _V2_SCORES:
+        number = _number(item[field], field)
+        if number is None:
+            raise AnalysisStreamError(f"{field} must be a number")
+        if number == -1:
+            number = None
+        elif not 0 <= number <= 100:
+            raise AnalysisStreamError(f"{field} must be between 0 and 100 or -1")
+        scores[field] = number
+    index = scores["policy_index_v3"]
+    expected = (
+        None if index is None else "SAFE" if index >= 70 else "WARN" if index >= 40 else "DANGER"
+    )
+    if item["evidence_level_v3"] != expected:
+        raise AnalysisStreamError("evidence_level_v3 does not match policy_index_v3")
+    summary = item["analysis_summary_ko"]
+    if summary is not None and not isinstance(summary, str):
+        raise AnalysisStreamError("analysis_summary_ko must be a string or null")
+    source = item["reason_source"]
+    if source not in {"groq", "python", "rules"} or (source == "rules") != (summary is None):
+        raise AnalysisStreamError("reason_source does not match analysis_summary_ko")
+    return {
+        "review_id": review_id,
+        **scores,
+        "evidence_level_v3": expected,
+        "analysis_summary_ko": summary,
+        "rules_reasons_ko": _strings(item, "rules_reasons_ko"),
+        "evidence_reasons_v3": _strings(item, "evidence_reasons_v3"),
+        "reason_source": source,
+    }
+
+
 class AnalysisStreamClient:
     def __init__(
         self,
@@ -230,8 +294,12 @@ class AnalysisStreamClient:
         timeout: float = 300,
         model_version: str | None = None,
         policy_version: str | None = None,
+        contract: str = "v0.5",
     ):
         self.url = _nonempty(url, "url")
+        if contract not in CONTRACTS:
+            raise AnalysisStreamError("contract must be v0.5 or v2")
+        self.contract = contract
         if (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
@@ -261,7 +329,7 @@ class AnalysisStreamClient:
         if type(job_id) is not int or job_id <= 0:
             raise AnalysisStreamError("job_id must be a positive integer")
         input_hash = _header(_nonempty(input_hash, "input_hash"), "input_hash")
-        payload = _reviews(reviews)
+        payload = _reviews(reviews, self.contract)
         headers = {
             "Accept": "text/event-stream",
             "X-Request-ID": str(job_id),
@@ -337,7 +405,7 @@ class AnalysisStreamClient:
                     or data.get("product_id") != product_id
                     or type(count) is not int
                     or count != len(ids)
-                    or data.get("contract_version") != "v0.5"
+                    or data.get("contract_version") != self.contract
                 ):
                     raise AnalysisStreamError("meta input or contract does not match request")
                 _nonempty(data.get("model_version"), "model_version")
@@ -347,7 +415,7 @@ class AnalysisStreamClient:
                 meta = data
             elif name == "result":
                 _same_request(data, job_id)
-                result = _result(data, ids)
+                result = (_result_v2 if self.contract == "v2" else _result)(data, ids)
                 review_id = result["review_id"]
                 if review_id in results and results[review_id] != result:
                     raise AnalysisStreamError("conflicting duplicate result")
@@ -381,4 +449,5 @@ class AnalysisStreamClient:
             model_version,
             policy_version,
             ai_job_id,
+            self.contract,
         )
