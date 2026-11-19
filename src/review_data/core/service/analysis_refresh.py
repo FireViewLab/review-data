@@ -266,14 +266,19 @@ class AnalysisRefreshService:
 
     async def _attach_active(self, campaign):
         # Keep a claimed request alive until completion; also reuse existing new-target queues.
+        # 대기 항목은 수만 건이고 진행 중 작업은 수십 건이다. 진행 중 작업을 인덱스로 먼저 고르고
+        # 항목은 기본키로 찾는다. 반대로 맞추면 작업 전체를 훑느라 수 분간 예약 잠금을 쥔다.
         await self.session.execute(
             text("""
+            WITH j AS MATERIALIZED (
+                SELECT id,platform,product_id FROM analysis_jobs
+                WHERE status IN ('running','queued') AND (status='running' OR (
+                    input_payload->>'model_version'=:model
+                    AND input_payload->>'policy_version'=:policy))
+            )
             UPDATE analysis_campaign_items i SET status='active',analysis_job_id=j.id
-            FROM analysis_jobs j WHERE i.campaign_id=:campaign AND i.status='pending'
-                AND j.platform=i.platform AND j.product_id=i.product_id
-                AND (j.status='running' OR (j.status='queued'
-                    AND j.input_payload->>'model_version'=:model
-                    AND j.input_payload->>'policy_version'=:policy))
+            FROM j WHERE i.campaign_id=:campaign AND i.status='pending'
+                AND i.platform=j.platform AND i.product_id=j.product_id
         """),
             {
                 "campaign": campaign.id,
