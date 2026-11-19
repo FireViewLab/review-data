@@ -58,6 +58,18 @@ API_DESCRIPTION = """
 
 같은 상품에 대한 수집 job 은 하나만 생기므로 반복 호출해도 안전하다.
 
+## 분석 결과 계약 (v0.5 / v2)
+분석 결과는 `contract_version`으로 구분한다. 재분석 중에는 상품마다 두 계약의 결과가 섞여 온다.
+
+- `v0.5`(기존 모델): `rti`·`level`(소문자 safe/warn/danger)·`reasons`를 쓴다.
+  v2 필드는 null 또는 빈 배열이다.
+- `v2`(v3.1 모델): `policy_index_v3`·`evidence_level_v3`(대문자 SAFE/WARN/DANGER)·
+  `analysis_summary_ko`·`rules_reasons_ko`를 쓴다. `rti`·`level`은 null, `reasons`는 빈 배열이다.
+- 정책 지수는 RTI나 허위 리뷰 확률이 아니다. 70 이상 SAFE, 40 이상 WARN, 40 미만 DANGER.
+- 점수 null은 계산 불가이며 0점이 아니다.
+  `text_score`·`behavior_score`·`network_score`는 두 계약에서 의미가 같다.
+- 한 문단 설명(`analysis_summary_ko`)이 null이면 `rules_reasons_ko` 문장 목록을 대신 보여 준다.
+
 ## 오류 형식
 모든 오류는 `{"error": {"code", "message", "detail"}}` 형식이다. 분기는 `code` 로 한다.
 """
@@ -136,6 +148,88 @@ class HealthOut(BaseModel):
 class PlatformsOut(BaseModel):
     available: list[str] = Field(examples=[["ably", "elevenst", "kurly"]])
     failed: list[str] = Field(description="불러오다 실패한 수집기 패키지")
+
+
+class ReviewAnalysisOut(BaseModel):
+    review_id: str
+    rti: float | None = Field(None, description="v0.5 RTI 0~100. v2 결과와 계산 불가는 null")
+    level: Literal["safe", "warn", "danger"] | None = Field(None, description="v0.5 등급")
+    text_score: float | None = Field(None, description="0~100, 계산 불가는 null")
+    behavior_score: float | None = Field(None, description="0~100, 계산 불가는 null")
+    network_score: float | None = Field(None, description="0~100, 계산 불가는 null")
+    reasons: list[str] = Field(default_factory=list, description="v0.5 사유. v2 결과는 빈 배열")
+    policy_index_v3: float | None = Field(
+        None, description="v2 정책 지수 0~100. RTI·확률이 아니다. 계산 불가는 null"
+    )
+    evidence_level_v3: Literal["SAFE", "WARN", "DANGER"] | None = Field(
+        None, description="v2 등급. 70 이상 SAFE, 40 이상 WARN, 40 미만 DANGER"
+    )
+    analysis_summary_ko: str | None = Field(None, description="v2 한 문단 설명. 없을 수 있다")
+    rules_reasons_ko: list[str] = Field(
+        default_factory=list, description="v2 상세 근거 문장. 한 문단 설명이 없을 때 보여 준다"
+    )
+    evidence_reasons_v3: list[str] = Field(default_factory=list, description="v2 근거 코드")
+    reason_source: Literal["python", "groq", "rules"] | None = Field(
+        None, description="v2 설명을 만든 방식. rules면 한 문단 설명이 없다"
+    )
+
+
+class AnalysisJobOut(BaseModel):
+    id: int
+    platform: str
+    product_id: str
+    status: Literal["queued", "running", "done", "failed", "stale"]
+    attempt_count: int
+    ai_job_id: str | None = None
+    input_review_count: int | None = None
+    last_error: str | None = Field(None, description="고정 실패 문구")
+    completed_at: str | None = Field(None, description="ISO 8601")
+    sampled: bool
+    source_review_count: int
+
+
+class AnalysisResponse(BaseModel):
+    status: Literal["not_analyzed", "disabled", "queued", "running", "done", "failed", "stale"]
+    is_current: bool = Field(description="결과가 지금 리뷰·목표 버전과 같은 입력인지")
+    contract_version: Literal["v0.5", "v2"] | None = Field(
+        None, description="결과를 받은 계약. 결과가 없으면 null"
+    )
+    model_version: str | None = None
+    policy_version: str | None = None
+    target_model_version: str | None = None
+    target_policy_version: str | None = None
+    review_count: int = Field(description="분석한 리뷰 수")
+    source_review_count: int = Field(description="저장 원본 리뷰 수")
+    sampled: bool = Field(description="500건을 넘어 별점 분포 대표 표본을 분석했는지")
+    job: AnalysisJobOut | None = None
+    refresh_job: AnalysisJobOut | None = Field(None, description="재분석 중인 새 작업")
+    results: list[ReviewAnalysisOut] = Field(description="이번 페이지 리뷰의 분석 결과")
+    next_cursor: str | None = None
+
+
+class CatalogAnalysisOut(BaseModel):
+    status: str
+    is_current: bool
+    contract_version: Literal["v0.5", "v2"] | None = None
+    avg_rti: float | None = Field(None, description="v0.5 평균 RTI. v2 상품은 null")
+    avg_policy_index_v3: float | None = Field(None, description="v2 평균 정책 지수")
+    scored_review_count: int
+    review_count: int
+    source_review_count: int
+    sampled: bool
+    model_version: str | None = None
+    policy_version: str | None = None
+    job_id: int | None = None
+
+
+class CatalogItem(BaseModel):
+    product: ProductOut
+    analysis: CatalogAnalysisOut
+
+
+class CatalogPage(BaseModel):
+    items: list[CatalogItem]
+    next_cursor: str | None = None
 
 
 def error(description: str) -> dict:
@@ -229,6 +323,100 @@ PRODUCT_RESPONSES: dict = {
 JOB_RESPONSES: dict = {
     200: {"model": JobOut, "description": "job 상태"},
     404: error("없는 job (code: NOT_FOUND)"),
+    **AUTH_ERROR,
+    **VALIDATION_ERROR,
+}
+
+_V05_RESULT = {
+    "review_id": "135039521",
+    "rti": 54.0,
+    "level": "warn",
+    "text_score": 54.0,
+    "behavior_score": None,
+    "network_score": None,
+    "reasons": ["TEXT_SHORT_REVIEW"],
+    "policy_index_v3": None,
+    "evidence_level_v3": None,
+    "analysis_summary_ko": None,
+    "rules_reasons_ko": [],
+    "evidence_reasons_v3": [],
+    "reason_source": None,
+}
+_V2_RESULT = {
+    **_V05_RESULT,
+    "rti": None,
+    "level": None,
+    "reasons": [],
+    "policy_index_v3": 15.8,
+    "evidence_level_v3": "DANGER",
+    "analysis_summary_ko": "첨부 사진이 없고 별점 5점에 본문이 짧아 주의 근거로 반영됐습니다.",
+    "rules_reasons_ko": ["의미 있는 본문이 10자 미만이라 길이 감점이 크게 반영됐습니다."],
+    "evidence_reasons_v3": ["TEXT_SHORT"],
+    "reason_source": "python",
+}
+
+
+def _analysis_example(result: dict, contract: str, model: str, policy: str) -> dict:
+    return {
+        "status": "done",
+        "is_current": True,
+        "contract_version": contract,
+        "model_version": model,
+        "policy_version": policy,
+        "target_model_version": model,
+        "target_policy_version": policy,
+        "review_count": 1,
+        "source_review_count": 1,
+        "sampled": False,
+        "job": None,
+        "refresh_job": None,
+        "results": [result],
+        "next_cursor": None,
+    }
+
+
+ANALYSIS_RESPONSES: dict = {
+    200: {
+        "model": AnalysisResponse,
+        "description": "분석 상태와 이번 페이지 리뷰의 결과",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "v2": {
+                        "summary": "v3.1 모델 (contract_version=v2)",
+                        "value": _analysis_example(
+                            _V2_RESULT,
+                            "v2",
+                            "ptext-koelectra-v3.1-b-seed20261115",
+                            "evidence-v3-balanced-interior-v1",
+                        ),
+                    },
+                    "v0.5": {
+                        "summary": "기존 모델 (contract_version=v0.5)",
+                        "value": _analysis_example(
+                            _V05_RESULT, "v0.5", "ptext-koelectra-v1-2epoch-20260929", "rti-v0.1"
+                        ),
+                    },
+                }
+            }
+        },
+    },
+    400: error("cursor 가 손상됨 (code: INVALID_CURSOR)"),
+    404: error("없는 상품 (code: NOT_FOUND)"),
+    **AUTH_ERROR,
+    **VALIDATION_ERROR,
+}
+
+CATALOG_RESPONSES: dict = {
+    200: {"model": CatalogPage, "description": "상품과 분석 요약"},
+    400: error("cursor 가 손상됨 (code: INVALID_CURSOR)"),
+    **AUTH_ERROR,
+    **VALIDATION_ERROR,
+}
+
+ANALYSIS_JOB_RESPONSES: dict = {
+    200: {"model": AnalysisJobOut, "description": "분석 작업 상태"},
+    404: error("없는 분석 작업 (code: NOT_FOUND)"),
     **AUTH_ERROR,
     **VALIDATION_ERROR,
 }
