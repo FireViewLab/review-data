@@ -951,6 +951,240 @@
         margin-top: 12px;
       }
 
+      /* 개요: 지금 상태 */
+      .section-heading {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--ink-2);
+        margin: 26px 0 12px;
+        letter-spacing: 0;
+      }
+      .health {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .health-tile {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        text-align: left;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--line-strong);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        color: var(--ink);
+        box-shadow: var(--shadow);
+        min-width: 0;
+      }
+      .health-tile:hover {
+        border-color: var(--accent);
+      }
+      .health-tile.good {
+        border-top-color: var(--good);
+      }
+      .health-tile.warn {
+        border-top-color: var(--warn);
+      }
+      .health-tile.bad {
+        border-top-color: var(--bad);
+      }
+      .health-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 650;
+        color: var(--ink-2);
+      }
+      .health-value {
+        font-size: 30px;
+        line-height: 1.15;
+        font-weight: 750;
+        letter-spacing: -0.5px;
+      }
+      .health-value small {
+        font-size: 14px;
+        font-weight: 550;
+        color: var(--muted);
+        letter-spacing: 0;
+      }
+      .health-tile .sub {
+        margin: 0;
+      }
+
+      /* 재분석 진행 카드 */
+      .hero {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 20px 22px;
+        margin-bottom: 16px;
+        box-shadow: var(--shadow);
+      }
+      .panel .hero {
+        border: 0;
+        padding: 0;
+        box-shadow: none;
+        margin-bottom: 18px;
+      }
+      .hero-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+      }
+      .hero-head > div:first-child {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .eyebrow {
+        font-size: 13px;
+        font-weight: 650;
+        color: var(--accent);
+      }
+      .hero-title {
+        font-size: 18px;
+        overflow-wrap: anywhere;
+      }
+      .hero-percent {
+        font-size: 40px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: -1px;
+      }
+      .hero-percent small {
+        font-size: 18px;
+        color: var(--muted);
+      }
+      .hero-bar {
+        height: 14px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+        overflow: hidden;
+        margin: 14px 0 16px;
+      }
+      .hero-bar i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        border-radius: 999px;
+      }
+      .hero-stats {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .hero-stats div {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .hero-stats span {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .hero-stats strong {
+        font-size: 18px;
+        overflow-wrap: anywhere;
+      }
+
+      /* 확인할 것 */
+      .attention {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .attention li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 11px 12px 11px 14px;
+        border-left: 4px solid var(--line-strong);
+        background: var(--surface-2);
+        border-radius: var(--radius-sm);
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+      .attention li:last-child {
+        margin-bottom: 0;
+      }
+      .attention li.warn {
+        border-left-color: var(--warn);
+        background: var(--warn-soft);
+      }
+      .attention li.bad {
+        border-left-color: var(--bad);
+        background: var(--bad-soft);
+      }
+      .attention li.ok {
+        border-left-color: var(--good);
+        background: var(--good-soft);
+      }
+      .attention li.muted {
+        color: var(--muted);
+      }
+
+      /* 기간 선택 */
+      .range-label {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--ink-2);
+      }
+      .segmented {
+        display: inline-flex;
+        background: var(--surface-2);
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 3px;
+        gap: 2px;
+      }
+      .segmented button {
+        min-height: 34px;
+        min-width: 64px;
+        border: 0;
+        background: none;
+        border-radius: 6px;
+        padding: 4px 12px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--ink-2);
+      }
+      .segmented button[aria-checked="true"] {
+        background: var(--surface);
+        color: var(--accent);
+        box-shadow: 0 1px 3px rgba(10, 14, 20, 0.15);
+      }
+      details.settings {
+        margin-top: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+      }
+      details.settings summary {
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 650;
+        color: var(--ink-2);
+        min-height: 32px;
+        display: flex;
+        align-items: center;
+      }
+      details.settings .filter {
+        margin: 12px 0;
+      }
+      .chart-canvas svg {
+        height: 280px;
+      }
+
       /* 영역별 배치 */
       main,
       section,
@@ -988,6 +1222,12 @@
       @media (max-width: 1180px) {
         body {
           grid-template-columns: 200px minmax(0, 1fr);
+        }
+        .health {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .hero-stats {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
         }
         main {
           padding: 0 22px 40px;
@@ -1072,6 +1312,19 @@
         }
         .value {
           font-size: 22px;
+        }
+        .health-value {
+          font-size: 24px;
+        }
+        .hero-percent {
+          font-size: 32px;
+        }
+        .hero-stats {
+          grid-template-columns: 1fr 1fr;
+        }
+        .segmented button {
+          min-width: 0;
+          padding: 4px 10px;
         }
         .review-cols,
         .mini-grid {
@@ -1168,14 +1421,26 @@
       </header>
       <div id="error-banner" class="notice hidden" role="alert"></div>
       <section id="overview-view">
-        <div id="overview-alerts" class="notice" role="status">
-          운영 상태 확인 중…
+        <h2 class="section-heading">지금 상태</h2>
+        <div class="health" id="health" aria-live="polite">
         </div>
+        <div id="backfill-hero">
+        </div>
+        <div class="panel attention-panel">
+          <h2>
+            확인할 것
+          </h2>
+          <ul id="overview-alerts" class="attention" role="status">
+            <li class="muted">운영 상태 확인 중…</li>
+          </ul>
+        </div>
+        <h2 class="section-heading">데이터 규모</h2>
         <div class="cards" id="totals">
         </div>
+        <h2 class="section-heading">처리 추이</h2>
         <div class="chart-filters">
-          <label for="overview-range">기간</label>
-          <select id="overview-range" class="dashboard-range">
+          <span class="range-label" id="overview-range-label">기간</span>
+          <select id="overview-range" class="dashboard-range" aria-labelledby="overview-range-label">
             <option value="1h">최근 1시간</option>
             <option value="6h" selected>최근 6시간</option>
             <option value="24h">최근 24시간</option>
@@ -1299,8 +1564,8 @@
           </div>
         </div>
         <div class="chart-filters">
-          <label for="collection-range">기간</label>
-          <select id="collection-range" class="dashboard-range">
+          <span class="range-label" id="collection-range-label">기간</span>
+          <select id="collection-range" class="dashboard-range" aria-labelledby="collection-range-label">
             <option value="1h">최근 1시간</option>
             <option value="6h" selected>최근 6시간</option>
             <option value="24h">최근 24시간</option>
@@ -1334,6 +1599,56 @@
         </div>
       </section>
       <section id="analysis-view" class="hidden">
+        <div class="panel">
+          <h2>
+            재분석(Backfill)
+          </h2>
+          <div id="analysis-backfill">
+          </div>
+          <div id="campaigns">
+          </div>
+          <details class="settings">
+            <summary>재분석 설정 · 목표 모델·정책 버전</summary>
+            <p class="sub">
+              AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
+              맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
+            </p>
+          <form id="refresh-target" class="filter">
+            <input
+              id="target-model"
+              aria-label="목표 모델 버전"
+              placeholder="model_version"
+              maxlength="200"
+              required
+            />
+            <input
+              id="target-policy"
+              aria-label="목표 정책 버전"
+              placeholder="policy_version"
+              maxlength="200"
+              required
+            />
+            <button class="btn" type="submit" id="start-refresh">
+              Backfill 시작 · 재개
+            </button>
+            <button class="btn" type="button" id="pause-refresh">
+              예약 중지
+            </button>
+            <button class="btn" type="button" id="retry-refresh">
+              실패 건 재시도
+            </button>
+          </form>
+          <div id="refresh-control" class="sub">
+          </div>
+          <div
+            id="refresh-message"
+            class="sub"
+            role="status"
+            aria-live="polite"
+          >
+          </div>
+          </details>
+        </div>
         <div class="panel">
           <h2>
             분석 PC
@@ -1380,8 +1695,8 @@
           </div>
         </div>
         <div class="chart-filters">
-          <label for="analysis-range">기간</label>
-          <select id="analysis-range" class="dashboard-range">
+          <span class="range-label" id="analysis-range-label">기간</span>
+          <select id="analysis-range" class="dashboard-range" aria-labelledby="analysis-range-label">
             <option value="1h">최근 1시간</option>
             <option value="6h" selected>최근 6시간</option>
             <option value="24h">최근 24시간</option>
@@ -1452,51 +1767,6 @@
           <div id="recovery-message" class="sub" role="status" aria-live="polite">
           </div>
           <div id="recovery-progress" class="hidden" role="region" aria-label="최근 복구 진행">
-          </div>
-        </div>
-        <div class="panel">
-          <h2>
-            모델 버전별 재분석
-          </h2>
-          <p class="sub">
-            AI 배포 완료 후 전달받은 모델·정책 버전으로 시작하세요. 큐 여유에
-            맞춰 처리하고 새 결과 저장 전까지 기존 결과를 유지합니다.
-          </p>
-          <form id="refresh-target" class="filter" style="margin: 12px 0">
-            <input
-              id="target-model"
-              aria-label="목표 모델 버전"
-              placeholder="model_version"
-              maxlength="200"
-              required
-            />
-            <input
-              id="target-policy"
-              aria-label="목표 정책 버전"
-              placeholder="policy_version"
-              maxlength="200"
-              required
-            />
-            <button class="btn" type="submit" id="start-refresh">
-              Backfill 시작 · 재개
-            </button>
-            <button class="btn" type="button" id="pause-refresh">
-              예약 중지
-            </button>
-            <button class="btn" type="button" id="retry-refresh">
-              실패 건 재시도
-            </button>
-          </form>
-          <div id="refresh-control" class="sub">
-          </div>
-          <div
-            id="refresh-message"
-            class="sub"
-            role="status"
-            aria-live="polite"
-          >
-          </div>
-          <div id="campaigns">
           </div>
         </div>
       </section>
@@ -2019,6 +2289,94 @@
           `</div>`
         );
       }
+      function healthTile(tab, title, state, label, value, sub) {
+        return `<button type="button" class="health-tile ${state}" data-tab="${tab}"><span class="health-head"><span>${title}</span><span class="pill ${state === "good" ? "alive" : state === "bad" ? "offline" : state === "warn" ? "partial" : ""}">${label}</span></span><span class="health-value">${value}</span><span class="sub">${sub}</span></button>`;
+      }
+      function renderHealth(d) {
+        const rate = d.rates_15m || {},
+          q = d.queues || {},
+          r = d.resources || {},
+          collectedHour = (platformData?.items || []).reduce((sum, x) => sum + Number(x.succeeded_1h || 0), 0),
+          analyzedHour = Number(rate.ai_completed_products ?? 0) * 4,
+          node = (d.analysis_nodes || [])[0],
+          gpu = node?.gpus?.[0],
+          load = r.load?.[0],
+          cores = r.cpu_count || 1;
+        const collectionPaused = pipelineControl?.collection_paused,
+          blocked = (platformData?.items || []).filter((x) => ["paused", "probing"].includes(x.state)).length;
+        const tiles = [
+          healthTile(
+            "collection",
+            "수집",
+            collectionPaused ? "warn" : blocked ? "warn" : "good",
+            collectionPaused ? "정지" : blocked ? `차단 ${blocked}곳` : "정상",
+            `${num(collectedHour)}<small> 상품/시간</small>`,
+            `대기 ${num(q.collection?.waiting)} · 처리 중 ${num(q.collection?.running)}`,
+          ),
+          healthTile(
+            "analysis",
+            "AI 분석",
+            pipelineControl?.analysis_paused ? "bad" : "good",
+            pipelineControl?.analysis_paused ? "정지" : "실행 중",
+            `${num(analyzedHour)}<small> 상품/시간</small>`,
+            `대기 ${num(q.analysis?.waiting)} · 처리 중 ${num(q.analysis?.running)}`,
+          ),
+          node
+            ? healthTile(
+                "analysis",
+                "분석 PC",
+                node.alive ? "good" : "bad",
+                node.alive ? "온라인" : "오프라인",
+                gpu ? `${Math.round(gpu.utilization_percent)}%<small> GPU</small>` : "—",
+                `처리 중 ${num(node.in_flight ?? 0)} · 5분 오류 ${num(node.errors_5m ?? 0)}`,
+              )
+            : healthTile("analysis", "분석 PC", "", "보고 없음", "—", "분석 PC 지표가 아직 없습니다"),
+          healthTile(
+            "system",
+            "Data 서버",
+            load > cores * 2 || r.cpu_percent >= 90 ? "warn" : "good",
+            load > cores * 2 ? "과부하" : "정상",
+            r.cpu_percent == null ? "—" : `${Math.round(r.cpu_percent)}%<small> CPU</small>`,
+            `부하 ${load == null ? "—" : load.toFixed(1)} · ${cores}코어 · 메모리 ${r.memory ? r.memory.percent + "%" : "—"}`,
+          ),
+        ];
+        $("health").innerHTML = tiles.join("");
+        const running = (d.analysis_campaigns || []).find((c) => c.status === "running");
+        $("backfill-hero").innerHTML = running ? backfillHero(running, d, true) : "";
+        $("analysis-backfill").innerHTML = running ? backfillHero(running, d, false) : "";
+      }
+      function shortTime(value) {
+        const t = new Date(value), two = (n) => String(n).padStart(2, "0");
+        return `${t.getMonth() + 1}/${t.getDate()} ${two(t.getHours())}:${two(t.getMinutes())}`;
+      }
+      function backfillHero(c, d, linked) {
+        const processed = Number(c.done) + Number(c.failed) + Number(c.skipped),
+          percent = c.total ? (100 * processed) / c.total : 100,
+          perHour = c.rate_products_per_minute != null ? c.rate_products_per_minute * 60 : null,
+          remaining = c.estimate_state === "estimated" ? c.estimated_remaining_seconds : null;
+        const span = (seconds) => {
+          if (seconds == null) return "계산 중";
+          const minutes = Math.max(1, Math.round(seconds / 60)),
+            h = Math.floor(minutes / 60);
+          return h ? `${h}시간 ${minutes % 60}분` : `${minutes}분`;
+        };
+        const stat = (label, value) => `<div><span>${label}</span><strong>${value}</strong></div>`;
+        return (
+          `<section class="hero" aria-label="재분석 진행">` +
+          `<div class="hero-head"><div><span class="eyebrow">재분석 진행 중${d.settings.analysis_refresh_enabled ? "" : " · 예약 중지"}</span><strong class="hero-title">${esc(c.model_version)}</strong><span class="sub">정책 ${esc(c.policy_version)}</span></div>` +
+          `<div class="hero-percent">${percent.toFixed(1)}<small>%</small></div></div>` +
+          `<div class="hero-bar" role="progressbar" aria-label="재분석 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent.toFixed(1)}"><i style="width:${percent}%"></i></div>` +
+          `<div class="hero-stats">` +
+          stat("완료 / 대상", `${num(c.done)} / ${num(c.total)}`) +
+          stat("처리량", perHour == null ? "계산 중" : `${num(Math.round(perHour))}/시간`) +
+          stat("남은 시간", span(remaining)) +
+          stat("완료 예정", c.estimated_completion_at ? shortTime(c.estimated_completion_at) : "계산 중") +
+          stat("실패", num(c.failed)) +
+          `</div>` +
+          (linked ? `<button class="link" data-tab="analysis">재분석 자세히 보기 →</button>` : `<div class="sub">예약 전 ${num(c.waiting)} · 큐 ${num(c.queued)} · 처리 중 ${num(c.running)} · 제외 ${num(c.skipped)} · 시작 ${date(c.created_at)}</div>`) +
+          `</section>`
+        );
+      }
       function renderOverview(d) {
         overviewData = d;
         const nodes = d.analysis_nodes || [];
@@ -2045,10 +2403,12 @@
           $("target-model").value = control.model_version;
           $("target-policy").value = control.policy_version;
         }
-        const campaigns = d.analysis_campaigns || [];
+        const campaigns = (d.analysis_campaigns || []).filter((c) => c.status !== "running");
         $("campaigns").innerHTML = campaigns.length
           ? campaigns.map((c, i) => campaignCard(c, d, i === 0)).join("")
-          : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "재분석 실행 대기 · 새 모델/정책 버전 확인 후 활성화합니다."}</div>`;
+          : (d.analysis_campaigns || []).some((c) => c.status === "running")
+            ? ""
+            : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "진행 중인 재분석이 없습니다. 새 모델·정책 버전이 오면 아래 설정에서 시작합니다."}</div>`;
         const retryInline = $("retry-failed-inline");
         if (retryInline) {
           retryInline.disabled = $("retry-refresh").disabled;
@@ -2700,17 +3060,40 @@
         const failures = hour?.buckets.reduce((sum, b) => sum + Number(b.analysis_failed || 0), 0);
         const completed = hour?.buckets.reduce((sum, b) => sum + Number(b.analysis_done || 0), 0);
         const warnings = [];
-        if (pipelineControl?.collection_paused) warnings.push("수집 중지");
-        if (pipelineControl?.analysis_paused) warnings.push("AI 분석 요청 중지");
+        const warn = (level, text, target) => warnings.push({ level, text, target });
+        if (pipelineControl?.collection_paused) warn("warn", "수집이 중지되어 있습니다.", "collection");
+        if (pipelineControl?.analysis_paused) warn("bad", "AI 분석 요청이 중지되어 있습니다.", "analysis");
         for (const item of platformData?.items || []) {
-          if (["paused", "probing"].includes(item.state)) warnings.push(`${item.label || names[item.platform] || item.platform}: ${item.state === "paused" ? "차단 대기" : "차단 후 시험 중"}`);
+          if (["paused", "probing"].includes(item.state)) warn("warn", `${item.label || names[item.platform] || item.platform}: ${item.state === "paused" ? "차단되어 대기 중" : "차단 뒤 한 건씩 시험 중"}`, "collection");
         }
         const offline = d.workers.filter(w => !w.alive).length;
-        if (offline) warnings.push(`오프라인 워커 ${num(offline)}개`);
-        if (failures > 0) warnings.push(`최근 1시간 분석 실패 ${num(failures)}건`);
+        if (offline) warn("bad", `오프라인 워커 ${num(offline)}개`, "system");
+        if (failures > 0) warn("bad", `최근 1시간 분석 실패 ${num(failures)}건`, "analysis");
+        for (const node of d.analysis_nodes || []) if (!node.alive) warn("bad", `분석 PC ${node.node_id} 응답 없음`, "analysis");
+        const load = d.resources?.load?.[0], cores = d.resources?.cpu_count || 1;
+        if (load > cores * 2) warn("warn", `Data 서버 과부하 (부하 ${load.toFixed(1)} / ${cores}코어)`, "system");
         const ready = pipelineControl && platformData && hour;
-        $("overview-alerts").textContent = warnings.length ? warnings.join(" · ") : ready ? "정상 운영 중" : "운영 상태 확인 중…";
-        $("overview-alerts").classList.toggle("good", !warnings.length && !!ready);
+        const list = $("overview-alerts");
+        list.replaceChildren();
+        if (!warnings.length) {
+          const item = document.createElement("li");
+          item.className = ready ? "ok" : "muted";
+          item.textContent = ready ? "확인할 문제가 없습니다. 정상 운영 중입니다." : "운영 상태 확인 중…";
+          list.append(item);
+        }
+        for (const w of warnings) {
+          const item = document.createElement("li");
+          item.className = w.level;
+          const text = document.createElement("span");
+          text.textContent = w.text;
+          const go = document.createElement("button");
+          go.className = "link";
+          go.dataset.tab = w.target;
+          go.textContent = { collection: "수집 보기", analysis: "AI 분석 보기", system: "시스템 보기" }[w.target] + " →";
+          item.append(text, go);
+          list.append(item);
+        }
+        renderHealth(d);
         // 합계 타일은 기존 집계를 재사용하고 대기·완료 지표 두 개를 추가한다.
         $("totals").querySelectorAll(".extra-total").forEach(x => x.remove());
         for (const [label, value, note] of [
@@ -2818,6 +3201,12 @@
         const hour = `${two(d.getHours())}`;
         return range === "7d" ? `${two(d.getMonth() + 1)}/${two(d.getDate())} ${hour}시` : range === "24h" ? `${hour}시` : `${hour}:${two(d.getMinutes())}`;
       }
+      function compact(value) {
+        const n = Number(value);
+        if (n >= 1e8) return (n / 1e8).toFixed(n >= 1e9 ? 0 : 1).replace(/\.0$/, "") + "억";
+        if (n >= 1e4) return (n / 1e4).toFixed(n >= 1e5 ? 0 : 1).replace(/\.0$/, "") + "만";
+        return num(n);
+      }
       function svgElement(tag, attrs = {}, text) {
         const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
         for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
@@ -2864,6 +3253,7 @@
         state.panel.querySelector(".chart-tooltip").classList.add("hidden");
         state.plot?.svg.querySelector(".chart-focus")?.remove();
       }
+      const stacked0 = (state) => state.key === "platform";
       function renderChart(state) {
         if (!visibleChartKeys().includes(state.key)) return;
         const data = timeseriesCache.get(selectedRange)?.data;
@@ -2877,7 +3267,7 @@
         }
         renderChartTable(state, data, series);
         if (!data.buckets.length) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "해당 기간의 처리 기록이 없습니다."; canvas.append(empty); return; }
-        const width = Math.max(240, canvas.clientWidth), height = 240, left = Math.min(82, Math.max(42, String(Math.max(1, ...data.buckets.map(b => series.reduce((sum, s) => sum + s.value(b), 0)))).length * 7 + 14)), right = width - 14, bottom = 200, top = 16;
+        const width = Math.max(240, canvas.clientWidth), height = 280, left = 52, right = width - (stacked0(state) ? 14 : 70), bottom = 240, top = 18;
         const stacked = state.key === "platform", n = data.buckets.length, step = (right - left) / n;
         const maxValue = Math.max(1, ...data.buckets.map(b => stacked ? series.reduce((sum, s) => sum + s.value(b), 0) : Math.max(0, ...series.map(s => s.value(b)))));
         const magnitude = 10 ** Math.floor(Math.log10(maxValue / 4));
@@ -2888,8 +3278,8 @@
         svg.append(svgElement("rect", { x: left + step * (n - 1), y: top, width: step, height: bottom - top, fill: token("--chart-pending"), stroke: token("--chart-grid"), "stroke-dasharray": "3 3" }));
         for (let i = 0; i <= 4; i++) {
           const value = tick * i, yy = y(value);
-          svg.append(svgElement("line", { x1: left, x2: right, y1: yy, y2: yy, stroke: token("--chart-grid") }));
-          svg.append(svgElement("text", { x: left - 6, y: yy + 4, "text-anchor": "end", fill: token("--chart-axis"), "font-size": 11 }, num(value)));
+          svg.append(svgElement("line", { x1: left, x2: right, y1: yy, y2: yy, stroke: token("--chart-grid"), "stroke-dasharray": i ? "2 4" : "" }));
+          svg.append(svgElement("text", { x: left - 8, y: yy + 4, "text-anchor": "end", fill: token("--chart-axis"), "font-size": 12 }, compact(value)));
         }
         if (stacked) data.buckets.forEach((bucket, index) => {
           const active = series.filter(s => s.value(bucket) > 0), total = active.reduce((sum, s) => sum + s.value(bucket), 0);
@@ -2902,26 +3292,79 @@
           const usable = Math.max(0, barHeight - gap * Math.max(0, active.length - 1));
           active.forEach(s => { const h = total ? usable * s.value(bucket) / total : 0; group.append(svgElement("rect", { x: bx, y: yy - h, width: barWidth, height: h, fill: s.color, opacity: index === n - 1 ? .65 : 1 })); yy -= h + gap; }); svg.append(group);
         });
-        else for (const s of series) {
-          const points = data.buckets.map((b, i) => `${x(i)},${y(s.value(b))}`);
-          if (n > 1) svg.append(svgElement("polyline", { points: points.slice(0, -1).join(" "), fill: "none", stroke: s.color, "stroke-width": 2 }));
-          if (n > 1) svg.append(svgElement("polyline", { points: points.slice(-2).join(" "), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-dasharray": "4 4" }));
-          if (n === 1) svg.append(svgElement("line", { x1: x(0) - 8, x2: x(0) + 8, y1: y(s.value(data.buckets[0])), y2: y(s.value(data.buckets[0])), stroke: s.color, "stroke-width": 2, "stroke-dasharray": "4 4" }));
+        else {
+          const ends = [];
+          for (const s of series) {
+            const points = data.buckets.map((b, i) => `${x(i)},${y(s.value(b))}`);
+            if (n > 1) {
+              // 옅은 면으로 흐름을 보이고, 진행 중인 마지막 구간은 점선으로 구분한다.
+              svg.append(svgElement("polygon", { points: `${x(0)},${bottom} ${points.slice(0, -1).join(" ")} ${x(n - 2)},${bottom}`, fill: s.color, opacity: 0.08 }));
+              svg.append(svgElement("polyline", { points: points.slice(0, -1).join(" "), fill: "none", stroke: s.color, "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+              svg.append(svgElement("polyline", { points: points.slice(-2).join(" "), fill: "none", stroke: s.color, "stroke-width": 2.5, "stroke-dasharray": "4 4" }));
+            } else {
+              svg.append(svgElement("line", { x1: x(0) - 8, x2: x(0) + 8, y1: y(s.value(data.buckets[0])), y2: y(s.value(data.buckets[0])), stroke: s.color, "stroke-width": 2.5, "stroke-dasharray": "4 4" }));
+            }
+            // 마지막 완료 구간 값을 선 끝에 적는다.
+            const at = Math.max(0, n - 2), value = s.value(data.buckets[at]);
+            svg.append(svgElement("circle", { cx: x(at), cy: y(value), r: 3.5, fill: s.color, stroke: token("--surface"), "stroke-width": 2 }));
+            ends.push({ y: y(value), text: compact(value), color: s.color });
+          }
+          ends.sort((a, b) => a.y - b.y);
+          for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 15);
+          for (const e of ends) svg.append(svgElement("text", { x: right + 8, y: e.y + 4, fill: token("--ink"), "font-size": 12, "font-weight": 650 }, e.text));
         }
         const labelStep = Math.max(1, Math.ceil(n / Math.max(1, Math.floor((right - left) / (selectedRange === "7d" ? 100 : 65)))));
         data.buckets.forEach((b, i) => {
-          if (i % labelStep === 0) svg.append(svgElement("text", { x: x(i), y: 222, "text-anchor": "middle", fill: token("--chart-axis"), "font-size": 11 }, chartTime(b.bucket, selectedRange)));
+          if (i % labelStep === 0) svg.append(svgElement("text", { x: x(i), y: 262, "text-anchor": "middle", fill: token("--chart-axis"), "font-size": 12 }, chartTime(b.bucket, selectedRange)));
         });
         canvas.prepend(svg); state.plot = { data, series, svg, x, y, bottom, left, right, width, stacked };
         if (document.activeElement === canvas) showChartBucket(state, state.index);
       }
       function renderVisibleCharts() { for (const key of visibleChartKeys()) renderChart(chartStates.get(key)); }
       function initializeDashboard() {
+        for (const select of document.querySelectorAll(".dashboard-range")) {
+          const group = document.createElement("div");
+          group.className = "segmented";
+          group.setAttribute("role", "radiogroup");
+          group.setAttribute("aria-labelledby", select.getAttribute("aria-labelledby"));
+          for (const option of select.options) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.setAttribute("role", "radio");
+            button.dataset.value = option.value;
+            button.textContent = option.textContent.replace("최근 ", "");
+            button.onclick = () => {
+              select.value = option.value;
+              select.dispatchEvent(new Event("change"));
+            };
+            group.append(button);
+          }
+          group.addEventListener("keydown", (e) => {
+            if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+            const buttons = [...group.children], index = buttons.findIndex((b) => b.dataset.value === select.value);
+            const next = buttons[(index + (e.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length];
+            next.click();
+            next.focus();
+            e.preventDefault();
+          });
+          select.classList.add("hidden");
+          select.after(group);
+        }
+        const syncSegmented = () => {
+          for (const group of document.querySelectorAll(".segmented"))
+            for (const button of group.children) {
+              const on = button.dataset.value === selectedRange;
+              button.setAttribute("aria-checked", String(on));
+              button.tabIndex = on ? 0 : -1;
+            }
+        };
+        syncSegmented();
         for (const control of document.querySelectorAll(".dashboard-range")) {
           control.value = selectedRange;
           control.onchange = e => {
             selectedRange = e.target.value;
             for (const select of document.querySelectorAll(".dashboard-range")) select.value = selectedRange;
+            syncSegmented();
             for (const state of chartStates.values()) {
               state.index = 0;
               hideChartBucket(state);
