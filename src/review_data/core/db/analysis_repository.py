@@ -22,6 +22,19 @@ from review_data.core.db.models import (
 from review_data.core.db.review_identity import representative_reviews
 from review_data.core.settings import Settings
 
+# 분석 입력 구성이 바뀌면 올린다. 이전 입력으로 끝난 결과는 다시 분석 대상이 된다.
+INPUT_VERSION = "image-count-v1"
+# 리뷰 응답에 사진 목록이 사진이 없어도 빈 목록으로 항상 오는 플랫폼. 저장된 목록이 비어 있으면
+# 사진 0장으로 확인된 것이다. 다른 플랫폼은 목록이 빠지거나 null로 올 수 있어 0과 미확인을
+# 구분하지 못하므로 null(미확인)로 보낸다.
+EMPTY_IMAGES_VERIFIED = frozenset({"kurly"})
+
+
+def image_count(platform: str, images: list[str] | None) -> int | None:
+    if images:
+        return len(images)
+    return 0 if platform in EMPTY_IMAGES_VERIFIED else None
+
 
 def input_hash(reviews: list[dict]) -> str:
     payload = json.dumps(reviews, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -214,6 +227,7 @@ class AnalysisRepository:
                 "content": r.content,
                 "rating": float(r.rating) if r.rating is not None else None,
                 "written_at": r.written_at.isoformat() if r.written_at is not None else None,
+                "image_count": image_count(platform, r.images),
             }
             for r in rows
         ]
@@ -232,6 +246,7 @@ class AnalysisRepository:
         )
         return (
             job.input_hash == digest
+            and payload.get("input_version") == INPUT_VERSION
             and payload.get("model_version") == settings.ai_model_version
             and payload.get("policy_version") == settings.ai_policy_version
             and selection_matches
@@ -282,6 +297,7 @@ class AnalysisRepository:
         payload = {
             "reviews": selected,
             "sampling": sampling,
+            "input_version": INPUT_VERSION,
             "model_version": settings.ai_model_version,
             "policy_version": settings.ai_policy_version,
         }
