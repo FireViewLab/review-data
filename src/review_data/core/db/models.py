@@ -300,6 +300,16 @@ class ReviewAnalysisRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AnalysisNode(Base):
+    """외부 분석 PC가 보낸 마지막 지표. 노드마다 한 행만 덮어쓴다."""
+
+    __tablename__ = "analysis_nodes"
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    metrics: Mapped[dict] = mapped_column(JSONB)
+
+
 class WorkerHeartbeat(Base):
     __tablename__ = "worker_heartbeats"
 
