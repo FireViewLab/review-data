@@ -833,3 +833,78 @@ async def test_run_forever_stops_claiming_during_outage(session_factory, monkeyp
     assert len(calls) == 2 and sleeps == [5, 5, 5]
     async with session_factory() as s:
         assert (await s.get(AnalysisJob, job)).status == "queued"
+
+
+def v2_results(reviews):
+    return AnalysisStreamResult(
+        [
+            {
+                "review_id": r["review_id"],
+                "policy_index_v3": 80.4,
+                "evidence_level_v3": "SAFE",
+                "text_score": 54,
+                "behavior_score": None,
+                "network_score": None,
+                "analysis_summary_ko": "정책상 안전 근거가 우세합니다.",
+                "rules_reasons_ko": ["검증된 별점은 5점입니다."],
+                "evidence_reasons_v3": ["RATING_VERIFIED"],
+                "reason_source": "python",
+            }
+            for r in reviews
+        ],
+        "v1",
+        "p1",
+        "ai-1",
+        "v2",
+    )
+
+
+async def test_v2_results_are_stored_beside_v05_fields(session_factory):
+    await seed(session_factory)
+
+    async def respond(kwargs):
+        return v2_results(kwargs["reviews"])
+
+    settings = config(ai_contract_version="v2")
+    assert await run_once(session_factory, "w", settings=settings, client=Client(respond))
+    async with session_factory() as s:
+        status = await AnalysisRepository(s).status("kurly", "p", settings)
+    assert status["status"] == "done" and status["contract_version"] == "v2"
+    row = status["results"][0]
+    assert row["rti"] is None and row["level"] is None and row["reasons"] == []
+    assert row["policy_index_v3"] == 80.4 and row["evidence_level_v3"] == "SAFE"
+    assert row["analysis_summary_ko"] == "정책상 안전 근거가 우세합니다."
+    assert row["rules_reasons_ko"] == ["검증된 별점은 5점입니다."]
+    assert row["evidence_reasons_v3"] == ["RATING_VERIFIED"]
+    assert row["reason_source"] == "python"
+
+
+async def test_v05_results_report_v05_contract(session_factory):
+    await seed(session_factory)
+    await run_once(session_factory, "w", settings=config(), client=Client())
+    async with session_factory() as s:
+        status = await AnalysisRepository(s).status("kurly", "p", config())
+    assert status["contract_version"] == "v0.5"
+    assert status["results"][0]["policy_index_v3"] is None
+    assert status["results"][0]["rules_reasons_ko"] == []
+
+
+async def test_run_forever_runs_concurrent_slots(session_factory, monkeypatch):
+    from review_data.worker import analysis_worker
+
+    running, workers = set(), []
+    both = asyncio.Event()
+
+    async def slow(factory, worker_id, **kwargs):
+        workers.append(worker_id)
+        running.add(worker_id)
+        if len(running) == 3:
+            both.set()
+        await both.wait()
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(analysis_worker, "run_once", slow)
+    settings = config(analysis_concurrency=3)
+    with pytest.raises(asyncio.CancelledError):
+        await analysis_worker.run_forever(session_factory, "w", settings=settings)
+    assert sorted(workers) == ["w-0", "w-1", "w-2"]

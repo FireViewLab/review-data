@@ -126,6 +126,7 @@ async def run_once(
             timeout=settings.ai_timeout_seconds,
             model_version=payload.get("model_version"),
             policy_version=payload.get("policy_version"),
+            contract=settings.ai_contract_version,
         )
         heartbeat = asyncio.create_task(_heartbeat(factory, claim, worker_id, lease_seconds))
         request = asyncio.create_task(
@@ -196,16 +197,36 @@ async def run_forever(
     settings = settings or get_settings()
     if not settings.ai_analysis_enabled:
         logger.info("분석 연결 비활성화: AI 설정과 계약 확정 후 활성화한다.")
+    # 요청 슬롯마다 작업을 따로 꺼내 동시에 보낸다. 장애 판단은 프로세스 전체가 함께 한다.
     guard = OutageGuard(settings)
-    while True:
-        try:
-            from review_data.core.service.analysis_refresh import AnalysisRefreshService
+    slots = settings.analysis_concurrency
+    await asyncio.gather(
+        *(
+            _slot(
+                factory,
+                worker_id if slots == 1 else f"{worker_id}-{index}",
+                poll_interval=poll_interval,
+                settings=settings,
+                backfill_only=backfill_only,
+                guard=guard,
+                refresh=index == 0,
+            )
+            for index in range(slots)
+        )
+    )
 
-            async with factory() as session:
-                await AnalysisRefreshService(session, settings).run_once()
-                await session.commit()
-        except Exception:
-            logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
+
+async def _slot(factory, worker_id, *, poll_interval, settings, backfill_only, guard, refresh):
+    while True:
+        if refresh:
+            try:
+                from review_data.core.service.analysis_refresh import AnalysisRefreshService
+
+                async with factory() as session:
+                    await AnalysisRefreshService(session, settings).run_once()
+                    await session.commit()
+            except Exception:
+                logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
         # 장애로 멈춘 동안에는 작업을 꺼내지 않아 대기 작업의 시도 횟수가 그대로 남는다.
         if wait := guard.wait_seconds():
             await asyncio.sleep(min(wait, poll_interval))
