@@ -32,7 +32,12 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-@router.get("/catalog", tags=[docs.TAG_PRODUCTS], summary="저장 상품·분석 요약 목록")
+@router.get(
+    "/catalog",
+    tags=[docs.TAG_PRODUCTS],
+    summary="저장 상품·분석 요약 목록",
+    responses=docs.CATALOG_RESPONSES,
+)
 async def get_catalog(
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
@@ -188,8 +193,11 @@ async def get_job(
     tags=[docs.TAG_PRODUCTS],
     summary="저장된 분석 상태·결과 조회",
     description="review_count는 분석 건수, source_review_count는 저장 원본 건수다. "
-    "sampled=true는 별점 분포 대표 표본이며 results에는 현재 페이지의 실제 분석 결과만 포함한다.",
+    "sampled=true는 별점 분포 대표 표본이며 results에는 현재 페이지의 실제 분석 결과만 포함한다. "
+    "contract_version이 v2이면 policy_index_v3·evidence_level_v3·analysis_summary_ko를, "
+    "v0.5이면 rti·level·reasons를 읽는다.",
     response_model=None,
+    responses=docs.ANALYSIS_RESPONSES,
 )
 async def get_analysis(
     platform: str,
@@ -218,6 +226,7 @@ async def get_analysis(
     tags=[docs.TAG_JOBS],
     summary="분석 작업 상태 조회",
     response_model=None,
+    responses=docs.ANALYSIS_JOB_RESPONSES,
 )
 async def get_analysis_job(job_id: int, session: SessionDep) -> dict:
     job = await session.get(AnalysisJob, job_id)
