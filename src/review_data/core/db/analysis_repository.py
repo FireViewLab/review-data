@@ -423,12 +423,16 @@ class AnalysisRepository:
     async def complete(self, claim: dict, worker_id: str, response, settings: Settings):
         settings = await effective_analysis_settings(self.session, settings)
         # 수집 저장과 같은 순서로 잠근다.
-        await self.lock_product(claim["platform"], claim["product_id"])
+        product = await self.lock_product(claim["platform"], claim["product_id"])
         job = await self._owned(claim["id"], worker_id)
         if job is None:
             return False
-        current = await self.snapshot(job.platform, job.product_id)
-        if not self._same(job, input_hash(current), settings):
+        # 수집이 리뷰를 바꾸면 상품의 입력 해시를 비운다. 해시가 그대로면 입력도 그대로이므로
+        # 스냅샷을 다시 만들지 않는다. 다를 때만 다시 계산해 확인한다.
+        digest = product.analysis_input_hash if product else None
+        if digest is None or digest != job.input_hash:
+            digest = input_hash(await self.snapshot(job.platform, job.product_id))
+        if not self._same(job, digest, settings):
             job.status = "stale"
             await self.session.flush()
             await self.enqueue(job.platform, job.product_id, settings)

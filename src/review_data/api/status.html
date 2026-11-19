@@ -1185,6 +1185,64 @@
         height: 280px;
       }
 
+      /* 수집: 플랫폼 카드 */
+      .platform-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .platform-card {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line-strong);
+        border-radius: var(--radius-sm);
+        padding: 14px 16px;
+        background: var(--surface);
+        min-width: 0;
+      }
+      .platform-card.alive {
+        border-left-color: var(--good);
+      }
+      .platform-card.partial {
+        border-left-color: var(--warn);
+      }
+      .platform-card.offline {
+        border-left-color: var(--bad);
+      }
+      .platform-card-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .platform-card-head strong {
+        font-size: 15px;
+      }
+      .platform-card-main {
+        display: flex;
+        gap: 16px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .platform-card-main b {
+        font-size: 22px;
+        color: var(--ink);
+        margin-right: 3px;
+      }
+      .platform-card-main b.error {
+        color: var(--bad);
+      }
+      .platform-card .sub {
+        margin-top: 4px;
+      }
+      .idle-platforms {
+        margin-top: 12px;
+      }
+      th.num,
+      td.num {
+        text-align: right;
+      }
+
       /* 영역별 배치 */
       main,
       section,
@@ -1533,15 +1591,6 @@
         </div>
         <div class="panel">
           <h2>
-            플랫폼 수집 상태
-          </h2>
-          <div id="platform-error" class="sub error" role="status">
-          </div>
-          <div class="table-wrap" id="platform-status">
-          </div>
-        </div>
-        <div class="panel">
-          <h2>
             수집 대기열
           </h2>
           <div id="collection-queue">
@@ -1551,18 +1600,17 @@
         </div>
         <div class="panel">
           <h2>
-            독립 상품 발굴
+            플랫폼별 상태
           </h2>
-          <div id="discovery">
+          <p class="sub">
+            문제 있는 플랫폼이 먼저 나옵니다. 수치는 최근 1시간 기준입니다.
+          </p>
+          <div id="platform-error" class="sub error" role="status">
+          </div>
+          <div id="platform-status">
           </div>
         </div>
-        <div class="panel">
-          <h2>
-            수집 실패 원인
-          </h2>
-          <div id="failures">
-          </div>
-        </div>
+        <h2 class="section-heading">처리 추이</h2>
         <div class="chart-filters">
           <span class="range-label" id="collection-range-label">기간</span>
           <select id="collection-range" class="dashboard-range" aria-labelledby="collection-range-label">
@@ -1595,6 +1643,20 @@
             </div>
           </div>
           <div class="chart-table table-wrap hidden">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            최근 수집 실패 원인
+          </h2>
+          <div id="failures">
+          </div>
+        </div>
+        <div class="panel">
+          <h2>
+            신규 상품 발굴
+          </h2>
+          <div id="discovery">
           </div>
         </div>
       </section>
@@ -2563,13 +2625,17 @@
           unknown: "기타 오류",
           legacy_unknown: "이전 이력 · 미분류",
         };
-        $("failures").innerHTML =
-          (d.collection_failure_causes || [])
-            .map(
-              (x) =>
-                `<div class="stat-row"><span>${esc(names[x.platform] || x.platform)} · ${esc(failureNames[x.failure_kind] || "기타 오류")}</span><span>${num(x.count)}건</span></div><div class="sub">정기 재예약 대기 ${num(x.cooling_down)}건 · 다음 재시도 가능 ${date(x.next_retry_at)}</div>`,
-            )
-            .join("") || '<div class="sub">최신 수집 실패 없음</div>';
+        const causes = [...(d.collection_failure_causes || [])].sort((a, b) => Number(b.count) - Number(a.count));
+        $("failures").innerHTML = causes.length
+          ? `<div class="table-wrap"><table><thead><tr><th>플랫폼</th><th>원인</th><th class="num">건수</th><th class="num">재예약 대기</th><th>다음 재시도</th></tr></thead><tbody>` +
+            causes
+              .map(
+                (x) =>
+                  `<tr><td>${esc(names[x.platform] || x.platform)}</td><td>${esc(failureNames[x.failure_kind] || "기타 오류")}</td><td class="num"><strong>${num(x.count)}</strong></td><td class="num">${num(x.cooling_down)}</td><td>${date(x.next_retry_at)}</td></tr>`,
+              )
+              .join("") +
+            `</tbody></table></div><div class="sub">상품별 최신 수집이 실패한 건수입니다. 재예약 대기는 정기 수집이 다시 시도하기를 기다리는 건수입니다.</div>`
+          : '<div class="sub">최근 수집 실패가 없습니다.</div>';
         const p = $("platform"),
           selected = p.value;
         p.innerHTML =
@@ -3161,31 +3227,37 @@
         finally { platformBusy = false; }
       }
       function renderPlatformStatus() {
-        const table = document.createElement("table");
-        const header = table.createTHead().insertRow();
-        for (const name of ["플랫폼", "상태", "주기", "대기 / 처리", "최근 성공 / 실패", "1시간 성공 / 실패", "24시간 실패 원인"]) {
-          const th = document.createElement("th"); th.textContent = name; header.append(th);
-        }
-        const labels = { normal: "정상", paused: "차단 대기", probing: "차단 후 한 건씩 시험", excluded: "수집 제외", inactive: "미수집" };
-        const body = table.createTBody();
-        const stateOrder = { paused: 0, probing: 1, normal: 2, excluded: 3, inactive: 4 };
-        const platformLabel = item => item.label || names[item.platform] || item.platform;
-        const sortedItems = [...platformData.items].sort((a, b) =>
-          ((stateOrder[a.state] ?? 5) - (stateOrder[b.state] ?? 5)) ||
-          platformLabel(a).localeCompare(platformLabel(b), "ko"),
+        const labels = { normal: "정상", paused: "차단 대기", probing: "차단 뒤 시험", excluded: "수집 제외", inactive: "미수집" };
+        const level = { normal: "alive", paused: "offline", probing: "partial", excluded: "excluded", inactive: "inactive" };
+        const order = { paused: 0, probing: 1, normal: 2, excluded: 3, inactive: 4 };
+        const label = (item) => item.label || names[item.platform] || item.platform;
+        const items = [...platformData.items].sort(
+          (a, b) =>
+            (order[a.state] ?? 5) - (order[b.state] ?? 5) ||
+            Number(b.failed_1h || 0) - Number(a.failed_1h || 0) ||
+            label(a).localeCompare(label(b), "ko"),
         );
-        for (const item of sortedItems) {
-          const row = body.insertRow();
-          row.insertCell().textContent = item.label || names[item.platform] || item.platform;
-          const badge = document.createElement("span"); badge.className = "pill " + (Object.hasOwn(labels, item.state) ? item.state : "excluded"); badge.textContent = labels[item.state] || "확인 필요"; row.insertCell().append(badge);
-          const interval = Number(item.interval_seconds);
-          const intervalLabel = interval > 0
-            ? `${num(interval)}초(시간당 최대 ${num(Math.floor(3600 / interval))}건)`
-            : "제한 없음";
-          for (const text of [intervalLabel, `${num(item.pending)} / ${num(item.running)}`, `${date(item.last_success_at)} / ${date(item.last_failure_at)}`, `${num(item.succeeded_1h)} / ${num(item.failed_1h)}`, (item.failure_kinds_24h || []).map(x => `${x.kind} ${num(x.count)}건`).join(" · ") || "없음"]) row.insertCell().textContent = text;
-        }
-        if (!platformData.items.length) { const cell = body.insertRow().insertCell(); cell.colSpan = 7; cell.textContent = "플랫폼 상태 없음"; }
-        $("platform-status").replaceChildren(table);
+        const active = items.filter((x) => !["excluded", "inactive"].includes(x.state)),
+          idle = items.filter((x) => ["excluded", "inactive"].includes(x.state));
+        const cardOf = (item) => {
+          const failed = Number(item.failed_1h || 0),
+            ok = Number(item.succeeded_1h || 0),
+            top = (item.failure_kinds_24h || [])[0],
+            kinds = { blocked: "접근 차단", credentials: "인증 필요", unsupported: "미지원", not_found: "상품 없음", timeout: "시간 초과", network: "네트워크·서버 오류", storage: "저장 실패", parse: "응답 형식 변경", unknown: "기타 오류" },
+            interval = Number(item.interval_seconds);
+          return (
+            `<div class="platform-card ${level[item.state] || ""}">` +
+            `<div class="platform-card-head"><strong>${esc(label(item))}</strong><span class="pill ${level[item.state] || "excluded"}">${labels[item.state] || "확인 필요"}</span></div>` +
+            `<div class="platform-card-main"><span><b class="ok-count">${num(ok)}</b> 성공</span><span><b class="${failed ? "error" : ""}">${num(failed)}</b> 실패</span></div>` +
+            `<div class="sub">대기 ${num(item.pending)} · 처리 중 ${num(item.running)} · ${interval > 0 ? `${num(interval)}초 간격` : "간격 제한 없음"}</div>` +
+            `<div class="sub">마지막 성공 ${date(item.last_success_at)}</div>` +
+            (top ? `<div class="sub">24시간 주요 실패: ${esc(kinds[top.kind] || top.kind)} ${num(top.count)}건</div>` : "") +
+            `</div>`
+          );
+        };
+        $("platform-status").innerHTML =
+          (active.length ? `<div class="platform-grid">${active.map(cardOf).join("")}</div>` : `<div class="empty">수집 중인 플랫폼이 없습니다.</div>`) +
+          (idle.length ? `<div class="sub idle-platforms">수집하지 않는 플랫폼: ${idle.map((x) => `${esc(label(x))}(${labels[x.state]})`).join(" · ")}</div>` : "");
       }
       function chartSeries(key, data) {
         const make = (key, label, color) => ({ key, label, color, value: b => Number(b[key] || 0) });
