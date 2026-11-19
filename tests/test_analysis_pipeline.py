@@ -7,7 +7,11 @@ import pytest
 from sqlalchemy import select, update
 
 from review_data.core.analysis_stream import AnalysisStreamError, AnalysisStreamResult
-from review_data.core.db.analysis_repository import FAILURE_REASONS, AnalysisRepository
+from review_data.core.db.analysis_repository import (
+    FAILURE_REASONS,
+    AnalysisRepository,
+    image_count,
+)
 from review_data.core.db.models import AnalysisJob, ProductRow, ReviewAnalysisRow, ReviewRow
 from review_data.core.settings import Settings
 from review_data.worker.analysis_worker import run_once
@@ -908,3 +912,48 @@ async def test_run_forever_runs_concurrent_slots(session_factory, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await analysis_worker.run_forever(session_factory, "w", settings=settings)
     assert sorted(workers) == ["w-0", "w-1", "w-2"]
+
+
+@pytest.mark.parametrize(
+    "platform,images,expected",
+    [
+        ("kurly", [], 0),
+        ("kurly", ["a", "b"], 2),
+        ("naver", [], None),
+        ("naver", None, None),
+        ("musinsa", ["a"], 1),
+    ],
+)
+def test_image_count_is_zero_only_when_platform_always_sends_images(platform, images, expected):
+    assert image_count(platform, images) == expected
+
+
+async def test_snapshot_sends_image_count_and_old_input_is_reanalyzed(session_factory):
+    old = await seed(session_factory)
+    async with session_factory() as s:
+        s.add(
+            ReviewRow(
+                platform="kurly",
+                product_id="p",
+                review_id="photo",
+                content="사진",
+                images=["x", "y"],
+            )
+        )
+        await s.commit()
+    async with session_factory() as s:
+        job = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+        reviews = (await s.get(AnalysisJob, job)).input_payload["reviews"]
+    counts = {r["review_id"]: r["image_count"] for r in reviews}
+    assert counts == {"photo": 2, "r0": 0, "r1": 0}
+    await run_once(session_factory, "w", settings=config(), client=Client())
+    async with session_factory() as s:
+        # 입력 버전이 없는 이전 결과는 같은 리뷰여도 다시 분석한다.
+        row = await s.get(AnalysisJob, job)
+        row.input_payload = {k: v for k, v in row.input_payload.items() if k != "input_version"}
+        await s.commit()
+    async with session_factory() as s:
+        again = await AnalysisRepository(s).enqueue("kurly", "p", config())
+        await s.commit()
+    assert again not in (old, job)

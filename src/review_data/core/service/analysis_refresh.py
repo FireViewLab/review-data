@@ -9,7 +9,11 @@ from sqlalchemy import exists, func, select, text, update
 
 from review_data.core.analysis_sampling import SAMPLING_VERSION
 from review_data.core.db.analysis_control import effective_analysis_settings
-from review_data.core.db.analysis_repository import FAILURE_KINDS, AnalysisRepository
+from review_data.core.db.analysis_repository import (
+    FAILURE_KINDS,
+    INPUT_VERSION,
+    AnalysisRepository,
+)
 from review_data.core.db.models import AnalysisCampaign, AnalysisCampaignItem, AnalysisJob
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.settings import Settings
@@ -35,7 +39,13 @@ class AnalysisRefreshService:
         await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
         key = hashlib.sha256(
             json.dumps(
-                [s.ai_model_version, s.ai_policy_version, SAMPLING_VERSION, s.ai_max_reviews]
+                [
+                    s.ai_model_version,
+                    s.ai_policy_version,
+                    SAMPLING_VERSION,
+                    s.ai_max_reviews,
+                    INPUT_VERSION,
+                ]
             ).encode()
         ).hexdigest()
         campaign = await self.session.scalar(
@@ -69,7 +79,8 @@ class AnalysisRefreshService:
                     AND j.input_payload->>'model_version'=:model
                     AND j.input_payload->>'policy_version'=:policy
                     AND j.input_payload->'sampling'->>'policy_version'=:sampling
-                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews)
+                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
+                    AND j.input_payload->>'input_version'=:input_version)
             """),
                 {
                     "campaign": campaign.id,
@@ -77,6 +88,7 @@ class AnalysisRefreshService:
                     "policy": s.ai_policy_version,
                     "sampling": SAMPLING_VERSION,
                     "max_reviews": s.ai_max_reviews,
+                    "input_version": INPUT_VERSION,
                 },
             )
         if reactivate and campaign.status == "superseded":
@@ -229,7 +241,8 @@ class AnalysisRefreshService:
                     AND j.input_payload->>'model_version'=:model
                     AND j.input_payload->>'policy_version'=:policy
                     AND j.input_payload->'sampling'->>'policy_version'=:sampling
-                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews)
+                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
+                    AND j.input_payload->>'input_version'=:input_version)
                 ON CONFLICT(campaign_id,platform,product_id) DO UPDATE
                     SET status='pending',analysis_job_id=NULL
                 RETURNING product_id
@@ -242,6 +255,7 @@ class AnalysisRefreshService:
                         "policy": settings.ai_policy_version,
                         "sampling": SAMPLING_VERSION,
                         "max_reviews": settings.ai_max_reviews,
+                        "input_version": INPUT_VERSION,
                     },
                 )
             )
