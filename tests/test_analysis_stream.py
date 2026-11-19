@@ -617,3 +617,111 @@ async def test_internal_ai_job_is_preserved_and_consistent(mock_http):
     mock_http(complete(done={**DONE, "ai_job_id": "different-ai-job"}))
     with pytest.raises(AnalysisStreamError):
         await analyze()
+
+
+V2_META = {**META, "contract_version": "v2"}
+V2_RESULT = {
+    "request_id": "7",
+    "review_id": "r1",
+    "policy_index_v3": 15.8,
+    "evidence_level_v3": "DANGER",
+    "text_score": 54.0,
+    "behavior_score": -1,
+    "network_score": -1,
+    "analysis_summary_ko": "짧은 본문과 5점 별점이 함께 나타났습니다.",
+    "rules_reasons_ko": ["의미 있는 본문이 10자 미만입니다."],
+    "evidence_reasons_v3": ["TEXT_SHORT"],
+    "reason_source": "python",
+}
+
+
+def v2_client():
+    return AnalysisStreamClient(URL, contract="v2")
+
+
+async def test_v2_request_and_result(mock_http):
+    reviews = [{**REVIEWS[0], "image_count": 0}, {**REVIEWS[0], "review_id": "r2"}]
+    done = {**DONE, "result_count": 2}
+    second = {**V2_RESULT, "review_id": "r2"}
+    mock_http(
+        event("meta", {**V2_META, "review_count": 2})
+        + event("result", V2_RESULT)
+        + event("result", second)
+        + event("done", done)
+    )
+    result = await analyze(v2_client(), reviews)
+    sent = json.loads(mock_http.requests[0].content)["reviews"]
+    assert [r["image_count"] for r in sent] == [0, None]
+    assert result.contract_version == "v2"
+    assert result.results[0] == {
+        "review_id": "r1",
+        "policy_index_v3": Decimal("15.8"),
+        "evidence_level_v3": "DANGER",
+        "text_score": Decimal("54.0"),
+        "behavior_score": None,
+        "network_score": None,
+        "analysis_summary_ko": V2_RESULT["analysis_summary_ko"],
+        "rules_reasons_ko": V2_RESULT["rules_reasons_ko"],
+        "evidence_reasons_v3": ["TEXT_SHORT"],
+        "reason_source": "python",
+    }
+
+
+async def test_v05_request_has_no_image_count(mock_http):
+    mock_http(complete())
+    await analyze(reviews=[{**REVIEWS[0], "image_count": 3}])
+    assert "image_count" not in json.loads(mock_http.requests[0].content)["reviews"][0]
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "0", True])
+async def test_v2_rejects_invalid_image_count(mock_http, value):
+    mock_http(complete(V2_RESULT, V2_META))
+    with pytest.raises(AnalysisStreamError, match="image_count"):
+        await analyze(v2_client(), [{**REVIEWS[0], "image_count": value}])
+
+
+async def test_v2_unavailable_index_has_no_level(mock_http):
+    result = {
+        **V2_RESULT,
+        "policy_index_v3": -1,
+        "evidence_level_v3": None,
+        "text_score": -1,
+        "analysis_summary_ko": None,
+        "reason_source": "rules",
+    }
+    mock_http(complete(result, V2_META))
+    row = (await analyze(v2_client())).results[0]
+    assert row["policy_index_v3"] is None and row["evidence_level_v3"] is None
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"evidence_level_v3": "SAFE"},
+        {"evidence_level_v3": "danger"},
+        {"policy_index_v3": None},
+        {"policy_index_v3": 101},
+        {"reason_source": "rules"},
+        {"analysis_summary_ko": None},
+        {"rules_reasons_ko": "사유"},
+        {"evidence_reasons_v3": [1]},
+    ],
+)
+async def test_v2_invalid_result(mock_http, patch):
+    mock_http(complete({**V2_RESULT, **patch}, V2_META))
+    with pytest.raises(AnalysisStreamError):
+        await analyze(v2_client())
+
+
+async def test_contract_must_match_meta(mock_http):
+    mock_http(complete(V2_RESULT, META))
+    with pytest.raises(AnalysisStreamError, match="contract"):
+        await analyze(v2_client())
+    mock_http(complete(meta=V2_META))
+    with pytest.raises(AnalysisStreamError, match="contract"):
+        await analyze()
+
+
+def test_unknown_contract():
+    with pytest.raises(AnalysisStreamError):
+        AnalysisStreamClient(URL, contract="v3")
