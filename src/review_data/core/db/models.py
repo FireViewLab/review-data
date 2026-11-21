@@ -272,6 +272,13 @@ class ReviewAnalysisRow(Base):
         CheckConstraint(
             "reason_source IN ('groq','python','rules')", name="ck_review_analyses_reason_source"
         ),
+        CheckConstraint("level_v4 IN ('SAFE','WARN','DANGER')", name="ck_review_analyses_level_v4"),
+        CheckConstraint(
+            "policy_index_v4 BETWEEN 0 AND 100", name="ck_review_analyses_policy_index_v4"
+        ),
+        CheckConstraint(
+            "text_probability_v4 BETWEEN 0 AND 1", name="ck_review_analyses_text_probability_v4"
+        ),
         Index(
             "idx_review_analyses_review",
             "platform",
@@ -300,6 +307,13 @@ class ReviewAnalysisRow(Base):
     reason_source: Mapped[str | None] = mapped_column(Text)
     model_version: Mapped[str | None] = mapped_column(Text)
     input_hash: Mapped[str | None] = mapped_column(Text)
+    # v4.0 텍스트 모델 + 등급 규칙 A(텍스트 중심) 결과. v3.1 결과와 같은 행에 나란히 둔다.
+    text_probability_v4: Mapped[Decimal | None] = mapped_column(Numeric)
+    text_score_v4: Mapped[Decimal | None] = mapped_column(Numeric)
+    policy_index_v4: Mapped[Decimal | None] = mapped_column(Numeric)
+    level_v4: Mapped[str | None] = mapped_column(Text)
+    model_version_v4: Mapped[str | None] = mapped_column(Text)
+    policy_version_v4: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
