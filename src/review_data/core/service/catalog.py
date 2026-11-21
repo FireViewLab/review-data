@@ -133,6 +133,24 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         .correlate(AnalysisJob)
         .scalar_subquery()
     )
+    average_index_v4 = (
+        select(func.avg(ReviewAnalysisRow.policy_index_v4))
+        .where(ReviewAnalysisRow.analysis_job_id == AnalysisJob.id)
+        .correlate(AnalysisJob)
+        .scalar_subquery()
+    )
+
+    def level_count(level: str):
+        return (
+            select(func.count())
+            .where(
+                ReviewAnalysisRow.analysis_job_id == AnalysisJob.id,
+                ReviewAnalysisRow.level_v4 == level,
+            )
+            .correlate(AnalysisJob)
+            .scalar_subquery()
+        )
+
     scored = (
         select(func.count(func.coalesce(ReviewAnalysisRow.rti, ReviewAnalysisRow.policy_index_v3)))
         .where(ReviewAnalysisRow.analysis_job_id == AnalysisJob.id)
@@ -145,6 +163,10 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
             AnalysisJob,
             average,
             average_index,
+            average_index_v4,
+            level_count("SAFE"),
+            level_count("WARN"),
+            level_count("DANGER"),
             scored,
             latest_job.id,
             latest_job.status,
@@ -166,7 +188,19 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
         )
     rows = (await session.execute(stmt)).all()
     items = []
-    for product, job, avg, avg_index, count, latest_id, latest_status in rows[:limit]:
+    for (
+        product,
+        job,
+        avg,
+        avg_index,
+        avg_index_v4,
+        v4_safe,
+        v4_warn,
+        v4_danger,
+        count,
+        latest_id,
+        latest_status,
+    ) in rows[:limit]:
         is_current = bool(
             job
             and product.analysis_input_hash
@@ -196,6 +230,12 @@ async def catalog_page(session: AsyncSession, settings: Settings, limit: int, cu
                     "avg_rti": float(avg) if status == "done" and avg is not None else None,
                     "avg_policy_index_v3": float(avg_index)
                     if status == "done" and avg_index is not None
+                    else None,
+                    "avg_policy_index_v4": float(avg_index_v4)
+                    if status == "done" and avg_index_v4 is not None
+                    else None,
+                    "v4_level_counts": {"SAFE": v4_safe, "WARN": v4_warn, "DANGER": v4_danger}
+                    if status == "done" and (v4_safe or v4_warn or v4_danger)
                     else None,
                     "scored_review_count": count if status == "done" else 0,
                     "review_count": sampling["analyzed_review_count"],

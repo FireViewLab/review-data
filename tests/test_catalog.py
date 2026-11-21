@@ -197,3 +197,25 @@ async def test_catalog_rejects_invalid_cursors(session_factory, cursor):
     async with session_factory() as session:
         with pytest.raises(ValueError):
             await catalog_page(session, config(), 10, cursor)
+
+
+async def test_catalog_reports_v4_summary_beside_v3(session_factory):
+    settings = config()
+    async with session_factory() as session:
+        job = await make_analysis(session, "a", [80, 90, 70], settings)
+        levels = {"r0": ("SAFE", 92.0), "r1": ("WARN", 55.0), "r2": ("DANGER", 10.0)}
+        for rid, (level, index) in levels.items():
+            await session.execute(
+                update(ReviewAnalysisRow)
+                .where(
+                    ReviewAnalysisRow.analysis_job_id == job.id, ReviewAnalysisRow.review_id == rid
+                )
+                .values(level_v4=level, policy_index_v4=index)
+            )
+        await make_analysis(session, "b", [80], settings)
+        await session.commit()
+        page, _ = await catalog_page(session, settings, 10)
+    a, b = page[0][1], page[1][1]
+    assert a["v4_level_counts"] == {"SAFE": 1, "WARN": 1, "DANGER": 1}
+    assert round(a["avg_policy_index_v4"], 1) == 52.3
+    assert b["avg_policy_index_v4"] is None and b["v4_level_counts"] is None
