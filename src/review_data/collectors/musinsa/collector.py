@@ -17,6 +17,7 @@ from review_data.core.base import BaseCollector
 from review_data.core.exceptions import ParseError, ProductNotFoundError
 from review_data.core.models import Product, Review
 from review_data.core.product_description import parse_description
+from review_data.core.raw_payload import sanitize
 
 IMAGE_BASE = "https://image.msscdn.net"
 SEARCH_URL = "https://www.musinsa.com/search/goods"
@@ -126,6 +127,7 @@ def _parse_review(item: dict[str, Any], product_id: str) -> Review | None:
             if (url := _image_url(img.get("imageUrl")))
         ],
         helpful_count=item.get("likeCount"),
+        raw_payload=sanitize(item, content),
     )
 
 

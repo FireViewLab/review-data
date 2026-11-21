@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 from review_data.core.base import BaseCollector
 from review_data.core.models import Product, Review
+from review_data.core.raw_payload import sanitize
 
 SEARCH_API = "https://m.oliveyoung.co.kr/search/api/v3/common/unified-search/goods"
 DETAIL_PAGE = "https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do"
@@ -222,4 +223,5 @@ class OliveyoungCollector(BaseCollector):
             option=goods.get("optionName") or None,
             images=images,
             helpful_count=item.get("recommendCount"),
+            raw_payload=sanitize(item, content),
         )

@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from review_data.core.base import BaseCollector
 from review_data.core.exceptions import ParseError
 from review_data.core.models import Product, Review
+from review_data.core.raw_payload import sanitize
 
 SEARCH_API = "https://apis.11st.co.kr/search/api/tab/total"
 PRODUCT_PAGE = "https://www.11st.co.kr/products/{pid}"
@@ -30,6 +31,24 @@ _XHR_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 _RATING_RE = re.compile(r"평점 별\s*\d+\s*점\s*중\s*(\d+(?:\.\d+)?)")
 _DATE_RE = re.compile(r"(20\d{2})\.(\d{2})\.(\d{2})")
 _BG_URL_RE = re.compile(r"url\(['\"]?(https?://[^'\")]+)")
+
+
+def _raw_payload(element, content: str) -> dict | None:
+    """리뷰 요소의 data 속성과 짧은 표시 문구(구매 확정·한달 사용 같은 배지)를 남긴다.
+
+    11번가는 HTML이라 원본 객체가 없다. 작성자 영역은 식별 정보라 뺀다.
+    """
+    attrs = {k: v for k, v in element.attrs.items() if k.startswith("data-")}
+    labels = []
+    for tag in element.select("em, span, strong, i, b"):
+        if tag.find_parent(class_="c_product_reviewer") or "c_product_reviewer" in (
+            tag.get("class") or []
+        ):
+            continue
+        text = tag.get_text(" ", strip=True)
+        if text and len(text) <= 20 and text not in labels:
+            labels.append(text)
+    return sanitize({"attributes": attrs, "labels": labels}, content)
 
 
 def _to_int(text: str | None) -> int | None:
@@ -219,6 +238,7 @@ class ElevenstCollector(BaseCollector):
             option=option,
             images=images,
             helpful_count=helpful,
+            raw_payload=_raw_payload(element, content),
         )
 
     def _parse_date(self, text: str) -> datetime | None:

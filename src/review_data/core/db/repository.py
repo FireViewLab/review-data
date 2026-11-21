@@ -219,6 +219,7 @@ class ReviewRepository:
                 "option": review.option.replace("\x00", "") if review.option is not None else None,
                 "images": [url.replace("\x00", "") for url in review.images],
                 "helpful_count": review.helpful_count,
+                "raw_payload": review.raw_payload,
                 "last_collected_at": now,
                 "updated_at": now,
             }
@@ -242,6 +243,11 @@ class ReviewRepository:
                 )
             )
             update_cols = {col: getattr(stmt.excluded, col) for col in _REVIEW_UPDATE_COLUMNS}
+            # 원본은 학습·검수용 보조 정보라 분석 입력 캐시 무효화 판단에 넣지 않는다.
+            # 원본을 넘기지 않는 수집 경로(수동 입력 등)가 기존 값을 지우지 않게 한다.
+            update_cols["raw_payload"] = func.coalesce(
+                stmt.excluded.raw_payload, ReviewRow.raw_payload
+            )
             update_cols["updated_at"] = case(
                 (data_changed, stmt.excluded.updated_at), else_=ReviewRow.updated_at
             )

@@ -24,6 +24,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from review_data.core.browser import BrowserCollector
 from review_data.core.exceptions import AccessBlockedError, NotSupportedError, ParseError
 from review_data.core.models import Product, Review
+from review_data.core.raw_payload import sanitize
 from review_data.core.settings import Settings, get_settings
 
 PRODUCT_URL = "https://brand.naver.com/{store}/products/{product_no}"
@@ -170,6 +171,7 @@ def parse_reviews(
                     if attach.get("reviewAttachmentType") == "I" and attach.get("attachUrl")
                 ],
                 helpful_count=_to_int(item.get("helpCount")),
+                raw_payload=sanitize(item, content),
             )
         )
         if len(reviews) >= limit:
