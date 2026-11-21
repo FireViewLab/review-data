@@ -1,6 +1,6 @@
 """이미 분석된 작업에 v4.0 결과를 채운다.
 
-현재 목표 모델로 완료된 작업 중 v4 등급이 비어 있는 행이 있는 작업을 ID 순서로 훑는다. 작업마다
+현재 목표 모델로 완료된 작업 중 v4 완료 시각이 없는 작업을 ID 순서로 훑는다. 작업마다
 저장된 분석 행의 리뷰 본문을 v4 서비스로 보내고 같은 행에 결과를 쓴다. 중간에 멈춰도 다시 실행하면
 비어 있는 작업부터 이어간다.
 """
@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 
 from review_data.core.db.models import AnalysisJob, ReviewAnalysisRow, ReviewRow
 from review_data.core.settings import Settings
@@ -20,17 +20,13 @@ PAGE = 200
 
 
 async def pending_jobs(session, model_version: str, after: int, limit: int = PAGE):
-    missing = exists().where(
-        ReviewAnalysisRow.analysis_job_id == AnalysisJob.id,
-        ReviewAnalysisRow.level_v4.is_(None),
-    )
     stmt = (
         select(AnalysisJob.id, AnalysisJob.platform, AnalysisJob.product_id)
         .where(
             AnalysisJob.status == "done",
             AnalysisJob.model_version == model_version,
+            AnalysisJob.v4_completed_at.is_(None),
             AnalysisJob.id > after,
-            missing,
         )
         .order_by(AnalysisJob.id)
         .limit(limit)
