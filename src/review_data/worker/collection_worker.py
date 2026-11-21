@@ -64,6 +64,8 @@ class _Collected:
 
     product: Product | None = None
     reviews: list[Review] | None = None
+    # 리뷰 수집 상한. 받은 수가 이보다 적으면 상품의 리뷰를 전부 받은 것이다.
+    review_limit: int | None = None
     errors: list[str] = field(default_factory=list)
     failure_kinds: list[str] = field(default_factory=list)
 
@@ -282,13 +284,13 @@ async def _collect(
                     return collected
 
             try:
+                collected.review_limit = (
+                    settings.browser_review_collect_limit
+                    if _is_browser_based(collector_cls)
+                    else settings.review_collect_limit
+                )
                 collected.reviews = await collector.get_reviews(
-                    claim.product_id,
-                    limit=(
-                        settings.browser_review_collect_limit
-                        if _is_browser_based(collector_cls)
-                        else settings.review_collect_limit
-                    ),
+                    claim.product_id, limit=collected.review_limit
                 )
             except CollectorError as exc:
                 collected.failure_kinds.append(failure_kind(exc))
@@ -342,9 +344,20 @@ async def _persist(
                 await AnalysisRepository(session).lock_product(claim.platform, claim.product_id)
                 if not await _owns_collection(session, claim):
                     return product_status, "failed", [*errors, "수집 작업 소유권 상실"]
-                await ReviewRepository(session).upsert_many(
-                    claim.platform, claim.product_id, collected.reviews
-                )
+                reviews = ReviewRepository(session)
+                await reviews.upsert_many(claim.platform, claim.product_id, collected.reviews)
+                # 상품 정보까지 받았고 리뷰가 상한보다 적게 왔다면 전부 받은 것이므로, 이번에
+                # 없는 기존 리뷰는 플랫폼에서 지워졌을 가능성이 높다.
+                if (
+                    collected.product is not None
+                    and collected.review_limit is not None
+                    and len(collected.reviews) < collected.review_limit
+                ):
+                    await reviews.mark_missing(
+                        claim.platform,
+                        claim.product_id,
+                        {r.review_id for r in collected.reviews},
+                    )
                 # 0건이어도 '수집 성공'이므로 기록한다. 이걸 빠뜨리면 리뷰 없는
                 # 상품이 매번 재수집 대상이 된다.
                 await ProductRepository(session).mark_reviews_collected(

@@ -103,6 +103,8 @@ class ReviewRow(Base):
     helpful_count: Mapped[int | None]
     # None 을 JSON null 이 아닌 SQL NULL 로 넣어야 재수집 시 coalesce 가 기존 원본을 지킨다.
     raw_payload: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    # 리뷰를 전부 받아온 재수집에서 빠진 시각. 다시 관측되면 비운다(플랫폼 삭제 추정).
+    missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     first_collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

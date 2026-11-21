@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, case, exists, func, or_, select, update
+from sqlalchemy import and_, case, exists, func, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -198,6 +198,34 @@ class ReviewRepository:
             next_cursor = _encode_review_cursor(last.written_at, last.review_id)
         return rows, next_cursor
 
+    async def mark_missing(
+        self,
+        platform: str,
+        product_id: str,
+        observed_ids: set[str],
+        *,
+        max_missing_ratio: float = 0.5,
+    ) -> int:
+        """이번 수집에서 관측되지 않은 기존 리뷰에 missing_since를 찍는다.
+
+        호출자는 리뷰를 상한 없이 전부 받아온 수집에서만 부른다. 관측이 0건이거나 기존 리뷰의
+        절반 넘게 빠졌다면 차단·파싱 오류일 수 있어 아무것도 표시하지 않는다.
+        """
+        if not observed_ids:
+            return 0
+        scope = and_(
+            ReviewRow.platform == platform,
+            ReviewRow.product_id == product_id,
+            ReviewRow.missing_since.is_(None),
+        )
+        stored = await self.session.scalar(select(func.count()).where(scope)) or 0
+        unseen = and_(scope, ReviewRow.review_id.not_in(observed_ids))
+        missing = await self.session.scalar(select(func.count()).where(unseen)) or 0
+        if not missing or missing > stored * max_missing_ratio:
+            return 0
+        await self.session.execute(update(ReviewRow).where(unseen).values(missing_since=func.now()))
+        return missing
+
     async def upsert_many(self, platform: str, product_id: str, reviews: list[Review]) -> None:
         if not reviews:
             return
@@ -248,6 +276,8 @@ class ReviewRepository:
             update_cols["raw_payload"] = func.coalesce(
                 stmt.excluded.raw_payload, ReviewRow.raw_payload
             )
+            # 다시 관측된 리뷰는 '빠짐' 표시를 지운다.
+            update_cols["missing_since"] = null()
             update_cols["updated_at"] = case(
                 (data_changed, stmt.excluded.updated_at), else_=ReviewRow.updated_at
             )
