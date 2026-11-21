@@ -5,7 +5,7 @@ import json
 import random
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, bindparam, or_, select, text, update
+from sqlalchemy import and_, bindparam, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -505,6 +505,9 @@ class AnalysisRepository:
         # 행마다 같은 UPDATE를 묶어 보낸다(executemany). ORM 동기화가 필요 없는 일괄 갱신이다.
         connection = await self.session.connection()
         await connection.execute(stmt, params)
+        await self.session.execute(
+            update(AnalysisJob).where(AnalysisJob.id == job_id).values(v4_completed_at=func.now())
+        )
         return len(params)
 
     async def fail(

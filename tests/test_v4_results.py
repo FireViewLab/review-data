@@ -143,3 +143,48 @@ async def test_v4_failure_leaves_v3_done_and_backfill_fills_later(session_factor
 def test_v4_url_requires_token():
     with pytest.raises(ValueError):
         config(v4_analyze_url="http://v4.invalid/v4/analyze")
+
+
+async def test_progress_counts_filled_jobs_and_reports_service(session_factory, monkeypatch):
+    from review_data.core.service import v4_status
+
+    settings = _settings(ai_model_version="v1")
+    await seed(session_factory, settings)
+
+    async def respond(kwargs):
+        return v2_results(kwargs["reviews"])
+
+    async def fake_analyze(url, token, platform, product_id, reviews, **kwargs):
+        return _v4(reviews)
+
+    def health(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(
+            200, json={"model_version": "ptext-koelectra-v4.0", "policy_version": "text-first-v1"}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(health)) as client:
+        async with session_factory() as s:
+            before = await v4_status.v4_progress(s, settings, client)
+        monkeypatch.setattr(v4_client, "analyze", fake_analyze)
+        assert await run_once(session_factory, "w", settings=settings, client=Client(respond))
+        async with session_factory() as s:
+            after = await v4_status.v4_progress(s, settings, client)
+    assert before["target_jobs"] == 0
+    assert after["target_jobs"] == 1 and after["filled_jobs"] == 1 and after["filled_15m"] == 1
+    assert after["service"] == {
+        "state": "ok",
+        "model_version": "ptext-koelectra-v4.0",
+        "policy_version": "text-first-v1",
+    }
+
+
+async def test_service_health_reports_unreachable():
+    from review_data.core.service import v4_status
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(down)) as client:
+        assert (await v4_status.service_health(_settings(), client)) == {"state": "unreachable"}
+    assert (await v4_status.service_health(config())) == {"state": "disabled"}

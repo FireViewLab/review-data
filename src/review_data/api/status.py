@@ -40,6 +40,7 @@ from review_data.core.service.operations import (
     queue_status,
 )
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
+from review_data.core.service.v4_status import v4_progress
 from review_data.core.settings import get_settings
 
 router = APIRouter(prefix="/status", include_in_schema=False)
@@ -480,6 +481,7 @@ async def build_overview(app, session) -> dict:
           LEFT JOIN analyzed a USING(bucket) ORDER BY b.bucket
     """,
     )
+    result["v4"] = await v4_progress(session, settings)
     # 빠른 영역은 같은 시점 값으로 맞춰 함께 싣는다. 화면은 /api/live 값으로 계속 덮어쓴다.
     live = await build_live(app, session)
     live["rates_15m"]["new_reviews"] = sum(row["new_reviews"] for row in metrics)

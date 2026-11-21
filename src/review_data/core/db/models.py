@@ -241,6 +241,8 @@ class AnalysisJob(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # v4.0 결과를 이 작업의 모든 분석 행에 채운 시각. 진행률과 백필 대상 선택에 쓴다.
+    v4_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ReviewAnalysisRow(Base):
