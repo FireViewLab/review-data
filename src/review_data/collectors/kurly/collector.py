@@ -8,6 +8,7 @@ from review_data.core.base import BaseCollector
 from review_data.core.exceptions import ParseError
 from review_data.core.models import Product, Review
 from review_data.core.product_description import parse_description
+from review_data.core.raw_payload import sanitize
 
 
 class KurlyCollector(BaseCollector):
@@ -298,6 +299,7 @@ class KurlyCollector(BaseCollector):
             option=None,
             images=self._extract_review_images(raw_review),
             helpful_count=helpful_count,
+            raw_payload=sanitize(raw_review, content),
         )
 
     async def search_products(

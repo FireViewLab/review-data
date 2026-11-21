@@ -59,5 +59,7 @@ class Review(BaseModel):
     option: str | None = Field(default=None, description="구매 옵션 (색상/사이즈 등)")
     images: list[str] = Field(default_factory=list)
     helpful_count: int | None = Field(default=None, description="도움돼요 수")
+    # 플랫폼 원본 응답에서 식별 정보를 뺀 것. 학습·검수용으로 저장만 하고 API로는 내보내지 않는다.
+    raw_payload: dict | None = Field(default=None, exclude=True)
 
     collected_at: datetime = Field(default_factory=datetime.now)
