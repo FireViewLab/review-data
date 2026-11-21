@@ -228,6 +228,12 @@ class CatalogAnalysisOut(BaseModel):
     contract_version: Literal["v0.5", "v2"] | None = None
     avg_rti: float | None = Field(None, description="v0.5 평균 RTI. v2 상품은 null")
     avg_policy_index_v3: float | None = Field(None, description="v2 평균 정책 지수")
+    avg_policy_index_v4: float | None = Field(
+        None, description="v4.0 평균 정책 지수(0~100). v4 결과가 없으면 null"
+    )
+    v4_level_counts: dict[Literal["SAFE", "WARN", "DANGER"], int] | None = Field(
+        None, description="v4.0 등급별 리뷰 수. v4 결과가 없으면 null"
+    )
     scored_review_count: int
     review_count: int
     source_review_count: int
