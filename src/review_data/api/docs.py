@@ -172,6 +172,21 @@ class ReviewAnalysisOut(BaseModel):
     reason_source: Literal["python", "groq", "rules"] | None = Field(
         None, description="v2 설명을 만든 방식. rules면 한 문단 설명이 없다"
     )
+    text_probability_v4: float | None = Field(
+        None, description="v4.0 텍스트 모델의 보정된 의심 확률 0~1. 아직 채우지 않았으면 null"
+    )
+    text_score_v4: float | None = Field(
+        None, description="v4.0 텍스트 점수 0~100(=round((1-확률)*100)), 높을수록 신뢰"
+    )
+    policy_index_v4: float | None = Field(
+        None,
+        description="v4.0 정책 지수. 등급 구간(SAFE 70~100, WARN 40~69, DANGER 0~39) 안의 값",
+    )
+    level_v4: Literal["SAFE", "WARN", "DANGER"] | None = Field(
+        None, description="v4.0 등급(규칙 A: 텍스트 중심, 사진 유무를 쓰지 않음)"
+    )
+    model_version_v4: str | None = Field(None, description="v4 모델 버전")
+    policy_version_v4: str | None = Field(None, description="v4 등급 규칙 버전")
 
 
 class AnalysisJobOut(BaseModel):
@@ -341,6 +356,12 @@ _V05_RESULT = {
     "rules_reasons_ko": [],
     "evidence_reasons_v3": [],
     "reason_source": None,
+    "text_probability_v4": None,
+    "text_score_v4": None,
+    "policy_index_v4": None,
+    "level_v4": None,
+    "model_version_v4": None,
+    "policy_version_v4": None,
 }
 _V2_RESULT = {
     **_V05_RESULT,
@@ -353,6 +374,12 @@ _V2_RESULT = {
     "rules_reasons_ko": ["의미 있는 본문이 10자 미만이라 길이 감점이 크게 반영됐습니다."],
     "evidence_reasons_v3": ["TEXT_SHORT"],
     "reason_source": "python",
+    "text_probability_v4": 0.031,
+    "text_score_v4": 97.0,
+    "policy_index_v4": 96.7,
+    "level_v4": "SAFE",
+    "model_version_v4": "ptext-koelectra-v4.0",
+    "policy_version_v4": "text-first-v1",
 }
 
 

@@ -5,7 +5,7 @@ import json
 import random
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy import and_, bindparam, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -470,6 +470,43 @@ class AnalysisRepository:
         await self.session.flush()
         return True
 
+    async def store_v4(self, job_id: int, response) -> int:
+        """v4.0 결과를 이미 저장된 분석 행(같은 작업·리뷰)에 채운다. 채운 행 수를 돌려준다."""
+        if not response.results:
+            return 0
+        stmt = (
+            update(ReviewAnalysisRow)
+            .where(
+                ReviewAnalysisRow.analysis_job_id == bindparam("job_id"),
+                ReviewAnalysisRow.review_id == bindparam("rid"),
+            )
+            .values(
+                text_probability_v4=bindparam("prob"),
+                text_score_v4=bindparam("score"),
+                policy_index_v4=bindparam("idx"),
+                level_v4=bindparam("lvl"),
+                model_version_v4=bindparam("mv"),
+                policy_version_v4=bindparam("pv"),
+            )
+        )
+        params = [
+            {
+                "job_id": job_id,
+                "rid": r.review_id,
+                "prob": r.text_probability,
+                "score": r.text_score,
+                "idx": r.policy_index,
+                "lvl": r.level,
+                "mv": response.model_version,
+                "pv": response.policy_version,
+            }
+            for r in response.results
+        ]
+        # 행마다 같은 UPDATE를 묶어 보낸다(executemany). ORM 동기화가 필요 없는 일괄 갱신이다.
+        connection = await self.session.connection()
+        await connection.execute(stmt, params)
+        return len(params)
+
     async def fail(
         self,
         job_id: int,
@@ -545,6 +582,12 @@ class AnalysisRepository:
                         "rules_reasons_ko": r.rules_reasons_ko,
                         "evidence_reasons_v3": r.evidence_reasons_v3,
                         "reason_source": r.reason_source,
+                        "text_probability_v4": _number(r.text_probability_v4),
+                        "text_score_v4": _number(r.text_score_v4),
+                        "policy_index_v4": _number(r.policy_index_v4),
+                        "level_v4": r.level_v4,
+                        "model_version_v4": r.model_version_v4,
+                        "policy_version_v4": r.policy_version_v4,
                     }
                 )
         sampling = sampling_info(job)

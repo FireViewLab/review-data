@@ -27,6 +27,15 @@ V2_COLUMNS = {
     "evidence_reasons_v3",
     "reason_source",
 }
+# 이후 마이그레이션에서 추가된 v4.0 결과 컬럼. 이 테스트가 검사하는 예전 리비전에는 없다.
+V4_COLUMNS = {
+    "text_probability_v4",
+    "text_score_v4",
+    "policy_index_v4",
+    "level_v4",
+    "model_version_v4",
+    "policy_version_v4",
+}
 
 
 async def _seed(session):
@@ -216,7 +225,7 @@ async def test_migration_round_trip_preserves_existing_data(engine):
                         # 이 리비전 뒤에 더한 v2 결과 컬럼은 아직 없다.
                         assert {c["name"] for c in columns} == set(
                             ReviewAnalysisRow.__table__.columns.keys()
-                        ) - V2_COLUMNS
+                        ) - V2_COLUMNS - V4_COLUMNS
                         assert inspector.get_pk_constraint("review_analyses")[
                             "constrained_columns"
                         ] == ["analysis_job_id", "review_id"]

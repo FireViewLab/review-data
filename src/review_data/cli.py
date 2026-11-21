@@ -435,6 +435,33 @@ async def _run_analysis_refresh(retry_failed):
         typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+@app.command("analysis-v4-backfill")
+def analysis_v4_backfill(
+    concurrency: int = typer.Option(4, "--concurrency", min=1, max=16),
+    max_jobs: int = typer.Option(0, "--max-jobs", min=0, help="0이면 전부"),
+) -> None:
+    """이미 분석된 작업 중 v4.0 결과가 비어 있는 것을 채웁니다."""
+    _require_env()
+    asyncio.run(_run_v4_backfill(concurrency, max_jobs))
+
+
+async def _run_v4_backfill(concurrency: int, max_jobs: int) -> None:
+    from review_data.core.service import v4_backfill
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    engine = create_engine()
+    try:
+        result = await v4_backfill.run(
+            create_session_factory(engine),
+            get_settings(),
+            concurrency=concurrency,
+            max_jobs=max_jobs,
+        )
+        typer.echo(json.dumps(result, ensure_ascii=False))
+    finally:
+        await engine.dispose()
+
+
 @app.command("analysis-backfill")
 def analysis_backfill(force: bool = typer.Option(False, "--force")) -> None:
     """기존 리뷰에 분석 작업을 예약합니다. --force는 같은 입력도 다시 분석합니다."""
