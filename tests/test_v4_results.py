@@ -112,7 +112,8 @@ async def test_v4_filled_after_v3_and_failure_does_not_fail_job(session_factory,
 
 
 async def test_v4_failure_leaves_v3_done_and_backfill_fills_later(session_factory, monkeypatch):
-    await seed(session_factory)
+    settings = _settings(ai_model_version="v1")
+    await seed(session_factory, settings)
 
     async def respond(kwargs):
         return v2_results(kwargs["reviews"])
@@ -121,7 +122,6 @@ async def test_v4_failure_leaves_v3_done_and_backfill_fills_later(session_factor
         raise v4_client.V4Error("down")
 
     monkeypatch.setattr(v4_client, "analyze", broken)
-    settings = _settings(ai_model_version="v1")
     assert await run_once(session_factory, "w", settings=settings, client=Client(respond))
     async with session_factory() as s:
         status = await AnalysisRepository(s).status("kurly", "p", settings)
