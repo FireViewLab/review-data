@@ -7,6 +7,7 @@ import time
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from review_data.core import v4_client
 from review_data.core.analysis_stream import AnalysisStreamClient, AnalysisStreamError
 from review_data.core.db.analysis_control import effective_analysis_settings
 from review_data.core.db.analysis_repository import AnalysisRepository
@@ -67,6 +68,38 @@ async def _heartbeat(factory, claim, worker_id, lease_seconds):
             await session.commit()
         if not owned:
             return
+
+
+async def fill_v4(
+    factory,
+    settings: Settings,
+    job_id: int,
+    platform: str,
+    product_id: str,
+    reviews: list[dict],
+    *,
+    client=None,
+) -> int:
+    """v3.1 결과를 저장한 작업에 v4.0 결과를 채운다. 실패해도 v3.1 작업은 그대로 둔다."""
+    if not settings.v4_analyze_url or settings.v4_internal_token is None:
+        return 0
+    try:
+        response = await v4_client.analyze(
+            settings.v4_analyze_url,
+            settings.v4_internal_token.get_secret_value(),
+            platform,
+            product_id,
+            reviews,
+            timeout=settings.v4_timeout_seconds,
+            client=client,
+        )
+        async with factory() as session:
+            count = await AnalysisRepository(session).store_v4(job_id, response)
+            await session.commit()
+        return count
+    except Exception as exc:  # noqa: BLE001 - v4는 보조 결과라 어떤 실패도 v3.1 작업에 번지지 않게 한다
+        logger.warning("분석 작업 %s v4 결과 저장 실패: %s", job_id, exc)
+        return 0
 
 
 async def run_once(
@@ -151,10 +184,21 @@ async def run_once(
             raise TimeoutError
         response = request.result()
         async with factory() as session:
-            await AnalysisRepository(session).complete(claim, worker_id, response, settings)
+            stored = await AnalysisRepository(session).complete(
+                claim, worker_id, response, settings
+            )
             await session.commit()
         if guard is not None:
             guard.record(False)
+        if stored:
+            await fill_v4(
+                factory,
+                settings,
+                claim["id"],
+                claim["platform"],
+                claim["product_id"],
+                payload["reviews"],
+            )
     except (AnalysisStreamError, TimeoutError, SQLAlchemyError) as exc:
         retryable = not isinstance(exc, AnalysisStreamError) or exc.retryable
         if isinstance(exc, AnalysisStreamError):

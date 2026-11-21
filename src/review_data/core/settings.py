@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     ai_outage_failure_threshold: int = Field(default=5, ge=1)
     ai_outage_pause_seconds: float = Field(default=300, gt=0)
     ai_outage_max_pause_seconds: float = Field(default=1800, gt=0)
+    # v4.0 텍스트 모델 서비스(review-model /v4/analyze).
+    # 주소가 있으면 v3.1 결과를 저장한 뒤 같은 입력으로 함께 채운다.
+    v4_analyze_url: str | None = None
+    v4_internal_token: SecretStr | None = None
+    v4_timeout_seconds: float = Field(default=120.0, gt=0)
 
     @field_validator("collection_platform_intervals")
     @classmethod
@@ -146,6 +151,11 @@ class Settings(BaseSettings):
             self.ai_internal_token = None
         self.ai_stream_url = self.ai_stream_url or None
         self.ai_model_version = self.ai_model_version or None
+        self.v4_analyze_url = self.v4_analyze_url or None
+        if self.v4_internal_token is not None and not self.v4_internal_token.get_secret_value():
+            self.v4_internal_token = None
+        if self.v4_analyze_url and self.v4_internal_token is None:
+            raise ValueError("V4_INTERNAL_TOKEN is required when V4_ANALYZE_URL is set")
         self.ai_policy_version = self.ai_policy_version or None
         if self.ai_analysis_enabled and not self.ai_stream_url:
             raise ValueError("AI_STREAM_URL is required when AI_ANALYSIS_ENABLED=true")
@@ -160,6 +170,17 @@ class Settings(BaseSettings):
                 or url.password
             ):
                 raise ValueError("AI_STREAM_URL must be an HTTP endpoint without credentials")
+        if self.v4_analyze_url:
+            from urllib.parse import urlsplit
+
+            url = urlsplit(self.v4_analyze_url)
+            if (
+                url.scheme not in {"http", "https"}
+                or not url.netloc
+                or url.username
+                or url.password
+            ):
+                raise ValueError("V4_ANALYZE_URL must be an HTTP endpoint without credentials")
         return self
 
     # ── 플랫폼별 인증 정보 ──────────────────
