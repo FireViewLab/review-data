@@ -101,7 +101,8 @@ class ReviewRow(Base):
     option: Mapped[str | None] = mapped_column("option", Text)
     images: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
     helpful_count: Mapped[int | None]
-    raw_payload: Mapped[dict | None] = mapped_column(JSONB)
+    # None 을 JSON null 이 아닌 SQL NULL 로 넣어야 재수집 시 coalesce 가 기존 원본을 지킨다.
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     first_collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

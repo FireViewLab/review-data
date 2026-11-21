@@ -17,6 +17,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from review_data.core.browser import BrowserCollector
 from review_data.core.exceptions import ParseError
 from review_data.core.models import Product, Review
+from review_data.core.raw_payload import sanitize
 from review_data.core.settings import Settings, get_settings
 
 SEARCH_URL = "https://ohou.se/search/index"
@@ -397,6 +398,7 @@ class OhouseCollector(BrowserCollector):
             option=option,
             images=images,
             helpful_count=self._optional_int(item.get("praiseCount")),
+            raw_payload=sanitize(item, content),
         )
 
     @staticmethod
