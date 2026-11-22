@@ -139,29 +139,58 @@ async def operational_status(session):
     return result
 
 
-async def collection_metrics(session):
-    """리뷰 전체/최근 관측/플랫폼 수를 한 번의 그룹 집계로 계산한다."""
-    return [
-        dict(row)
-        for row in (
-            await session.execute(
-                text("""
+async def review_totals(session) -> dict[str, dict]:
+    """플랫폼별 상품·리뷰 전체 수. 리뷰 전체를 훑어 수십 초가 걸리므로 호출자가 캐시한다."""
+    rows = await session.execute(
+        text("""
             WITH review_counts AS (
-                SELECT platform,count(*) AS reviews,
-                    count(*) FILTER (WHERE first_collected_at>=now()-interval '15 minutes')
-                        AS new_reviews,
-                    count(*) FILTER (WHERE last_collected_at>=now()-interval '15 minutes')
-                        AS refreshed_reviews
-                FROM reviews GROUP BY platform
+                SELECT platform, count(*) AS reviews FROM reviews GROUP BY platform
             ), product_counts AS (
-                SELECT platform,count(*) AS products FROM products GROUP BY platform
+                SELECT platform, count(*) AS products FROM products GROUP BY platform
             )
-            SELECT p.platform,p.products,coalesce(r.reviews,0) AS reviews,
-                coalesce(r.new_reviews,0) AS new_reviews,
-                coalesce(r.refreshed_reviews,0) AS refreshed_reviews
+            SELECT p.platform, p.products, coalesce(r.reviews, 0) AS reviews
             FROM product_counts p LEFT JOIN review_counts r USING(platform)
             ORDER BY p.platform
         """)
-            )
-        ).mappings()
+    )
+    return {row.platform: {"products": row.products, "reviews": row.reviews} for row in rows}
+
+
+async def recent_review_counts(session) -> dict[str, dict]:
+    """최근 15분 신규·갱신 리뷰 수. 인덱스와 최근 수집 상품만 봐서 빠르다."""
+    counts: dict[str, dict] = {}
+    for row in await session.execute(
+        text("""
+            SELECT platform, count(*) AS n FROM reviews
+            WHERE first_collected_at >= now() - interval '15 minutes' GROUP BY platform
+        """)
+    ):
+        counts.setdefault(row.platform, {})["new_reviews"] = row.n
+    for row in await session.execute(
+        text("""
+            SELECT r.platform, count(*) AS n
+            FROM products p
+            JOIN reviews r ON r.platform = p.platform AND r.product_id = p.product_id
+            WHERE p.reviews_last_collected_at >= now() - interval '15 minutes'
+              AND r.last_collected_at >= now() - interval '15 minutes'
+            GROUP BY r.platform
+        """)
+    ):
+        counts.setdefault(row.platform, {})["refreshed_reviews"] = row.n
+    return counts
+
+
+async def collection_metrics(session, totals: dict[str, dict] | None = None):
+    """플랫폼별 전체 수(캐시 가능)와 최근 15분 신규·갱신 수를 합친다."""
+    totals = totals if totals is not None else await review_totals(session)
+    recent = await recent_review_counts(session)
+    return [
+        {
+            "platform": platform,
+            "products": total["products"],
+            "reviews": total["reviews"],
+            "new_reviews": recent.get(platform, {}).get("new_reviews", 0),
+            "refreshed_reviews": recent.get(platform, {}).get("refreshed_reviews", 0),
+        }
+        for platform, total in sorted(totals.items())
     ]
