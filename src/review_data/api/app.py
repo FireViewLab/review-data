@@ -99,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_engine = engine
     app.state.session_factory = create_session_factory(engine)
     app.state.status_cache = None
+    app.state.review_totals_cache = None
     app.state.status_cache_lock = asyncio.Lock()
     sampler = ResourceSampler()
     app.state.resource_metrics = sampler.sample()

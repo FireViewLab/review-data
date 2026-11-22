@@ -38,6 +38,7 @@ from review_data.core.service.operations import (
     discovery_status,
     operational_status,
     queue_status,
+    review_totals,
 )
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
 from review_data.core.service.v4_status import v4_progress
@@ -348,6 +349,9 @@ async def rows(session, sql, params=None):
 
 
 OVERVIEW_TTL_SECONDS = 60
+# 집계가 느려져도 갱신 간격이 이 이상 벌어지지 않게 한다.
+OVERVIEW_MAX_STALE_SECONDS = 180
+REVIEW_TOTALS_TTL_SECONDS = 600
 LIVE_TTL_SECONDS = 2
 
 
@@ -435,7 +439,14 @@ async def build_live(app, session) -> dict:
 async def build_overview(app, session) -> dict:
     settings = await effective_analysis_settings(session, get_settings())
     result = await operational_status(session)
-    metrics = await collection_metrics(session)
+    # 플랫폼별 전체 리뷰 수는 리뷰 420만 건을 훑어 20초 넘게 걸린다. 10분 동안 재사용한다.
+    cached_totals = getattr(app.state, "review_totals_cache", None)
+    if cached_totals is None or time.monotonic() - cached_totals[0] > REVIEW_TOTALS_TTL_SECONDS:
+        cached_totals = app.state.review_totals_cache = (
+            time.monotonic(),
+            await review_totals(session),
+        )
+    metrics = await collection_metrics(session, cached_totals[1])
     result["platforms"] = [
         {key: row[key] for key in ("platform", "products", "reviews")} for row in metrics
     ]
@@ -536,7 +547,7 @@ async def overview(request: Request, session: SessionDep, refresh: bool = False)
     task = getattr(app.state, "status_refresh_task", None)
     refreshing = task is not None and not task.done()
     # 집계가 느린 동안에는 갱신 간격도 늘려 DB를 계속 붙잡지 않는다.
-    stale_after = max(OVERVIEW_TTL_SECONDS, 2 * cached[2])
+    stale_after = min(max(OVERVIEW_TTL_SECONDS, 2 * cached[2]), OVERVIEW_MAX_STALE_SECONDS)
     if not refreshing and (refresh or time.monotonic() - cached[0] >= stale_after):
         app.state.status_refresh_task = asyncio.create_task(_refresh_overview(app, cached))
         refreshing = True
