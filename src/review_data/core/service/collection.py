@@ -67,10 +67,10 @@ class CollectionService:
             )
 
         if product is not None and await collection_stopped(self.session):
-            # 운영자가 수집을 멈춘 동안 만든 job 은 재개 전까지 실행되지 않는다. 그 job 을 실어 보내면
-            # 화면이 끝나지 않을 작업을 기다리며 '새로 수집 중'을 계속 그린다. 저장된 데이터만 job 없이
-            # 돌려주고, 재개 뒤에는 스케줄러가 낡은 상품을 다시 예약한다.
-            # 처음 보는 상품은 보여줄 데이터가 없으므로 아래에서 job 을 만들어 재개 직후 수집되게 둔다.
+            # 수집을 멈춘 동안 만든 job 은 재개 전까지 실행되지 않는다.
+            # 그 job 을 실어 보내면 화면이 '새로 수집 중'을 끝없이 그린다.
+            # 저장된 데이터만 job 없이 돌려주고, 재개 뒤에는 스케줄러가 다시 예약한다.
+            # 처음 보는 상품은 보여줄 데이터가 없어 아래에서 job 을 만든다.
             reviews, next_cursor = await self.reviews.list_page(
                 platform, product_id, limit=review_limit, cursor=review_cursor
             )
