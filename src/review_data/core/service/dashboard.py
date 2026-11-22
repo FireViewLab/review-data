@@ -143,7 +143,10 @@ async def platform_status(session, settings: Settings, labels: dict[str, str]) -
         key = kind if kind and kind != "unknown" else failure_kind(error or "")
         kinds.setdefault(platform, {})
         kinds[platform][key] = kinds[platform].get(key, 0) + count
-    names = sorted(set(rows) | set(labels) - {"_template"})
+    # 수집기가 없는 플랫폼 이름(예: 대문자로 잘못 들어온 요청)은 카드로 만들지 않는다.
+    # 실패 원인 표에서는 그대로 보인다.
+    registered = set(labels) - {"_template"}
+    names = sorted(registered) if labels else sorted(rows)
     items = []
     for platform in names:
         row = rows.get(platform)

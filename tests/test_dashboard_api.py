@@ -173,3 +173,40 @@ def test_dashboard_endpoints_require_login_and_validate_range(engine, dashboard_
         assert client.get("/status/api/timeseries?range=2h").status_code == 422
         platforms = client.get("/status/api/platforms")
         assert platforms.status_code == 200 and isinstance(platforms.json()["items"], list)
+
+
+async def test_platform_status_skips_unregistered_platform_names(session):
+    session.add_all(
+        [
+            CollectionJob(
+                platform="ELEVENST", product_id="x", idempotency_key="u1", status="failed"
+            ),
+            CollectionJob(
+                platform="elevenst", product_id="y", idempotency_key="u2", status="pending"
+            ),
+        ]
+    )
+    await session.flush()
+    settings = Settings(_env_file=None)
+    items = (await platform_status(session, settings, {"elevenst": "11번가"}))["items"]
+    assert [i["platform"] for i in items] == ["elevenst"]
+
+
+async def test_collection_metrics_reuses_totals_and_counts_recent(session):
+    from review_data.core.db.models import ProductRow, ReviewRow
+    from review_data.core.service.operations import collection_metrics, review_totals
+
+    session.add(ProductRow(platform="kurly", product_id="p", name="상품", url="https://x"))
+    await session.flush()
+    session.add_all(
+        [
+            ReviewRow(platform="kurly", product_id="p", review_id=f"r{i}", content="본문")
+            for i in range(3)
+        ]
+    )
+    await session.flush()
+    totals = await review_totals(session)
+    assert totals == {"kurly": {"products": 1, "reviews": 3}}
+    rows = await collection_metrics(session, {"kurly": {"products": 1, "reviews": 99}})
+    assert rows[0]["reviews"] == 99  # 캐시한 전체 수를 그대로 쓴다
+    assert rows[0]["new_reviews"] == 3

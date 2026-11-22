@@ -609,6 +609,19 @@
         background: var(--good-soft);
         color: var(--good);
       }
+      .campaign-history {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .campaign-history summary {
+        cursor: pointer;
+        padding: 6px 0;
+      }
+      .campaign-history .stat-row {
+        padding: 6px 0;
+        border-top: 1px solid var(--line);
+      }
       .pill.running {
         background: var(--accent-soft);
         color: var(--accent);
@@ -2722,12 +2735,21 @@
           $("target-policy").value = control.policy_version;
         }
         $("v4-progress").innerHTML = v4Card(d.v4);
-        const campaigns = (d.analysis_campaigns || []).filter((c) => c.status !== "running");
-        $("campaigns").innerHTML = campaigns.length
+        const all = d.analysis_campaigns || [],
+          campaigns = all.filter((c) => c.status !== "running" && c.status !== "superseded"),
+          superseded = all.filter((c) => c.status === "superseded");
+        const history = superseded.length
+          ? `<details class="campaign-history"><summary>이전 재분석 기록 ${superseded.length}건 (다음 버전으로 넘어가 중단됨)</summary>` +
+            superseded
+              .map((c) => `<div class="stat-row"><span>#${c.id} ${esc(c.model_version)} · 정책 ${esc(c.policy_version)}</span><span>완료 ${num(c.done)} / ${num(c.total)} · ${date(c.created_at)} 시작 · ${date(c.completed_at)} 전환</span></div>`)
+              .join("") +
+            `</details>`
+          : "";
+        $("campaigns").innerHTML = (campaigns.length
           ? campaigns.map((c, i) => campaignCard(c, d, i === 0)).join("")
           : (d.analysis_campaigns || []).some((c) => c.status === "running")
             ? ""
-            : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "진행 중인 재분석이 없습니다. 새 모델·정책 버전이 오면 아래 설정에서 시작합니다."}</div>`;
+            : `<div class="sub">${d.settings.analysis_refresh_enabled ? "목표 버전으로 재분석 대상을 확인 중입니다." : "진행 중인 재분석이 없습니다. 새 모델·정책 버전이 오면 아래 설정에서 시작합니다."}</div>`) + history;
         const retryInline = $("retry-failed-inline");
         if (retryInline) {
           retryInline.disabled = $("retry-refresh").disabled;
@@ -2979,14 +3001,18 @@
           ...live,
           rates_15m: { ...(slow.rates_15m || {}), ...live.rates_15m },
         });
-        $("totals-time").textContent = slowData ? date(slowData.checked_at) + " 기준 · 합계 1분마다 갱신" : "합계 집계 중…";
+        $("totals-time").textContent = slowData ? `${date(slowData.checked_at)} 기준 (${ago(slowData.checked_at)}) · 합계는 1~3분마다 갱신` : "합계 집계 중…";
         $("connection").innerHTML = '<i class="dot"></i>실시간';
         $("updated").textContent = !slowData
-          ? "합계 집계 중…"
-          : "합계 " +
-            date(slowData.checked_at) +
-            " 기준" +
-            (slowData.refreshing ? " · 갱신 중…" : "");
+          ? "합계 집계 중"
+          : `합계 ${ago(slowData.checked_at)}${slowData.refreshing ? " · 갱신 중" : ""}`;
+        $("updated").title = slowData ? `합계 기준 시각 ${date(slowData.checked_at)}` : "";
+      }
+      function ago(value) {
+        const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+        if (seconds < 60) return "방금";
+        const minutes = Math.floor(seconds / 60);
+        return minutes < 60 ? `${minutes}분 전` : `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 전`;
       }
       function loggedOut() {
         return !$("login-modal").classList.contains("hidden");
