@@ -485,7 +485,16 @@ async def test_consolidated_collection_counts_include_zero_and_reobserved_platfo
     now = datetime.now(UTC)
     old = now - timedelta(days=2)
     for platform in ("test-a", "test-b", "test-empty"):
-        session.add(ProductRow(platform=platform, product_id="p", name="상품", url="https://x"))
+        # 수집 워커는 리뷰를 저장할 때 상품의 리뷰 수집 시각도 함께 남긴다.
+        session.add(
+            ProductRow(
+                platform=platform,
+                product_id="p",
+                name="상품",
+                url="https://x",
+                reviews_last_collected_at=now if platform != "test-empty" else None,
+            )
+        )
     await session.flush()
     for platform, rid, first, last in [
         ("test-a", "old", old, old),
