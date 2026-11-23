@@ -115,7 +115,8 @@ class Settings(BaseSettings):
     ai_model_version: str | None = None
     ai_policy_version: str | None = None
     # AI 응답 계약. v2는 v3.1 모델의 정책 지수·등급·한 문단 설명을 돌려주며 주소도 v2 경로다.
-    ai_contract_version: Literal["v0.5", "v2"] = "v0.5"
+    # v4는 v4.0 텍스트 모델 서비스(V4_ANALYZE_URL)를 직접 호출해 결과를 v4 칸에 저장한다.
+    ai_contract_version: Literal["v0.5", "v2", "v4"] = "v0.5"
     # 워커 프로세스 하나가 동시에 보내는 분석 요청 수. AI 서버가 받을 수 있는 만큼만 올린다.
     analysis_concurrency: int = Field(default=1, ge=1, le=32)
     # AI 서버 장애(5xx·429, 연결 실패, 시간 초과)가 이 횟수만큼 이어지면 워커가 요청을 멈춘다.
@@ -124,8 +125,8 @@ class Settings(BaseSettings):
     ai_outage_failure_threshold: int = Field(default=5, ge=1)
     ai_outage_pause_seconds: float = Field(default=300, gt=0)
     ai_outage_max_pause_seconds: float = Field(default=1800, gt=0)
-    # v4.0 텍스트 모델 서비스(review-model /v4/analyze).
-    # 주소가 있으면 v3.1 결과를 저장한 뒤 같은 입력으로 함께 채운다.
+    # v4.0 텍스트 모델 서비스(/v4/analyze). 계약이 v4면 분석 주소로 쓰고,
+    # v0.5·v2면 그 결과를 저장한 뒤 같은 입력으로 v4 칸을 함께 채운다.
     v4_analyze_url: str | None = None
     v4_internal_token: SecretStr | None = None
     v4_timeout_seconds: float = Field(default=120.0, gt=0)
@@ -157,7 +158,10 @@ class Settings(BaseSettings):
         if self.v4_analyze_url and self.v4_internal_token is None:
             raise ValueError("V4_INTERNAL_TOKEN is required when V4_ANALYZE_URL is set")
         self.ai_policy_version = self.ai_policy_version or None
-        if self.ai_analysis_enabled and not self.ai_stream_url:
+        if self.ai_analysis_enabled and self.ai_contract_version == "v4":
+            if not self.v4_analyze_url:
+                raise ValueError("V4_ANALYZE_URL is required when AI_CONTRACT_VERSION=v4")
+        elif self.ai_analysis_enabled and not self.ai_stream_url:
             raise ValueError("AI_STREAM_URL is required when AI_ANALYSIS_ENABLED=true")
         if self.ai_stream_url:
             from urllib.parse import urlsplit

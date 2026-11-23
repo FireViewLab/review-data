@@ -70,6 +70,34 @@ async def _heartbeat(factory, claim, worker_id, lease_seconds):
             return
 
 
+def _analysis_client(settings: Settings, payload: dict):
+    """계약이 v4면 v4 서비스, 아니면 기존 SSE 분석 서버로 보낸다."""
+    if settings.ai_contract_version == "v4":
+        return v4_client.V4AnalysisClient(
+            settings.v4_analyze_url,
+            settings.v4_internal_token.get_secret_value() if settings.v4_internal_token else "",
+            timeout=settings.v4_timeout_seconds,
+            model_version=payload.get("model_version"),
+            policy_version=payload.get("policy_version"),
+        )
+    return AnalysisStreamClient(
+        settings.ai_stream_url,
+        token=settings.ai_internal_token.get_secret_value() if settings.ai_internal_token else None,
+        timeout=settings.ai_timeout_seconds,
+        model_version=payload.get("model_version"),
+        policy_version=payload.get("policy_version"),
+        contract=settings.ai_contract_version,
+    )
+
+
+async def _call(client, **kwargs):
+    """v4 오류를 분석 서버 오류와 같은 구분(원인·재시도)으로 바꿔 실패 처리·장애 감지를 공유한다."""
+    try:
+        return await client.analyze(**kwargs)
+    except v4_client.V4Error as exc:
+        raise AnalysisStreamError(str(exc), retryable=exc.retryable, kind=exc.kind) from exc
+
+
 async def fill_v4(
     factory,
     settings: Settings,
@@ -151,19 +179,11 @@ async def run_once(
     try:
         if not payload.get("reviews") or not claim["input_hash"]:
             raise AnalysisStreamError("저장된 분석 입력이 없습니다.")
-        client = client or AnalysisStreamClient(
-            settings.ai_stream_url,
-            token=settings.ai_internal_token.get_secret_value()
-            if settings.ai_internal_token
-            else None,
-            timeout=settings.ai_timeout_seconds,
-            model_version=payload.get("model_version"),
-            policy_version=payload.get("policy_version"),
-            contract=settings.ai_contract_version,
-        )
+        client = client or _analysis_client(settings, payload)
         heartbeat = asyncio.create_task(_heartbeat(factory, claim, worker_id, lease_seconds))
         request = asyncio.create_task(
-            client.analyze(
+            _call(
+                client,
                 platform=claim["platform"],
                 product_id=claim["product_id"],
                 reviews=payload["reviews"],
@@ -190,7 +210,7 @@ async def run_once(
             await session.commit()
         if guard is not None:
             guard.record(False)
-        if stored:
+        if stored and settings.ai_contract_version != "v4":
             await fill_v4(
                 factory,
                 settings,

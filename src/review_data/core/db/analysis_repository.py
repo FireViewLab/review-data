@@ -21,6 +21,7 @@ from review_data.core.db.models import (
 )
 from review_data.core.db.review_identity import representative_reviews
 from review_data.core.settings import Settings
+from review_data.core.v4_client import V4Response
 
 # 분석 입력 구성이 바뀌면 올린다. 이전 입력으로 끝난 결과는 다시 분석 대상이 된다.
 INPUT_VERSION = "image-count-v1"
@@ -441,6 +442,8 @@ class AnalysisRepository:
             settings.ai_policy_version and response.policy_version != settings.ai_policy_version
         ):
             raise ValueError("목표 분석 버전과 응답 버전이 다릅니다.")
+        if isinstance(response, V4Response):
+            return await self._complete_v4(job, response)
         expected = {r["review_id"] for r in (job.input_payload or {}).get("reviews", [])}
         results = response.results
         actual = [r["review_id"] for r in results]
@@ -466,6 +469,49 @@ class AnalysisRepository:
         }
         job.status = "done"
         job.completed_at = datetime.now(UTC)
+        job.lease_expires_at = None
+        await self.session.flush()
+        return True
+
+    async def _complete_v4(self, job: AnalysisJob, response: V4Response) -> bool:
+        """v4 단독 분석 결과를 저장한다. 본문이 빈 리뷰는 v4가 판단하지 않아 행을 만들지 않는다."""
+        expected = {
+            str(r["review_id"])
+            for r in (job.input_payload or {}).get("reviews", [])
+            if (r.get("content") or "").strip()
+        }
+        if {r.review_id for r in response.results} != expected or len(response.results) != len(
+            expected
+        ):
+            raise ValueError("분석 결과의 리뷰 식별자가 입력과 다릅니다.")
+        for r in response.results:
+            self.session.add(
+                ReviewAnalysisRow(
+                    analysis_job_id=job.id,
+                    platform=job.platform,
+                    product_id=job.product_id,
+                    review_id=r.review_id,
+                    input_hash=job.input_hash,
+                    model_version=response.model_version,
+                    text_probability_v4=r.text_probability,
+                    text_score_v4=r.text_score,
+                    policy_index_v4=r.policy_index,
+                    level_v4=r.level,
+                    model_version_v4=response.model_version,
+                    policy_version_v4=response.policy_version,
+                )
+            )
+        now = datetime.now(UTC)
+        job.model_version = response.model_version
+        job.policy_version = response.policy_version
+        job.result = {
+            "review_count": len(response.results),
+            "ai_job_id": None,
+            "contract_version": "v4",
+        }
+        job.status = "done"
+        job.completed_at = now
+        job.v4_completed_at = now
         job.lease_expires_at = None
         await self.session.flush()
         return True
