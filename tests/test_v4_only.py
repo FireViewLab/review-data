@@ -8,6 +8,7 @@ from review_data.core import v4_client
 from review_data.core.db.analysis_repository import AnalysisRepository
 from review_data.core.db.models import AnalysisJob, AnalysisRefreshControl, ReviewAnalysisRow
 from review_data.core.service import v4_adopt
+from review_data.core.settings import Settings
 from review_data.worker.analysis_worker import run_once
 from tests.test_analysis_pipeline import Client, config, seed, v2_results
 from tests.test_v4_results import _v4
@@ -91,9 +92,11 @@ async def test_v4_http_status_retryability(code, retryable):
 
 
 def test_v4_contract_needs_v4_url_not_stream_url():
-    assert _v4_settings(ai_stream_url=None).ai_contract_version == "v4"
+    base = {"_env_file": None, "ai_analysis_enabled": True, "ai_contract_version": "v4"}
+    ok = Settings(**base, v4_analyze_url="http://v4.invalid/v4/analyze", v4_internal_token="t")
+    assert ok.ai_stream_url is None
     with pytest.raises(ValueError):
-        config(ai_contract_version="v4", ai_stream_url=None)
+        Settings(**base, ai_stream_url="http://test.invalid/analyze")
 
 
 async def test_adopt_marks_filled_jobs_current_without_reanalysis(session_factory, monkeypatch):
