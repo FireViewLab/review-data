@@ -33,8 +33,10 @@ async def adopt(session, *, model_version: str, policy_version: str, dry_run: bo
                 """
                 UPDATE analysis_jobs t SET
                     result = coalesce(t.result, '{}'::jsonb) || jsonb_build_object(
+                        'contract_version', 'v4',
                         'adopted_from', jsonb_build_object(
-                            'model_version', t.model_version, 'policy_version', t.policy_version)),
+                            'model_version', t.model_version, 'policy_version', t.policy_version,
+                            'contract_version', coalesce(t.result->>'contract_version', 'v0.5'))),
                     model_version = :model,
                     policy_version = :policy,
                     input_payload = t.input_payload || jsonb_build_object(

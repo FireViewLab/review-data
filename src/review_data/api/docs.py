@@ -58,17 +58,16 @@ API_DESCRIPTION = """
 
 같은 상품에 대한 수집 job 은 하나만 생기므로 반복 호출해도 안전하다.
 
-## 분석 결과 계약 (v0.5 / v2)
-분석 결과는 `contract_version`으로 구분한다. 재분석 중에는 상품마다 두 계약의 결과가 섞여 온다.
+## 분석 결과 (v4.0)
+분석 결과는 v4.0 텍스트 모델 하나로 낸다. 리뷰별 결과에는 `review_id`와 v4 필드만 담긴다.
 
-- `v0.5`(기존 모델): `rti`·`level`(소문자 safe/warn/danger)·`reasons`를 쓴다.
-  v2 필드는 null 또는 빈 배열이다.
-- `v2`(v3.1 모델): `policy_index_v3`·`evidence_level_v3`(대문자 SAFE/WARN/DANGER)·
-  `analysis_summary_ko`·`rules_reasons_ko`를 쓴다. `rti`·`level`은 null, `reasons`는 빈 배열이다.
-- 정책 지수는 RTI나 허위 리뷰 확률이 아니다. 70 이상 SAFE, 40 이상 WARN, 40 미만 DANGER.
-- 점수 null은 계산 불가이며 0점이 아니다.
-  `text_score`·`behavior_score`·`network_score`는 두 계약에서 의미가 같다.
-- 한 문단 설명(`analysis_summary_ko`)이 null이면 `rules_reasons_ko` 문장 목록을 대신 보여 준다.
+- `level_v4`: SAFE / WARN / DANGER (규칙 A, 텍스트 중심. 사진 유무는 쓰지 않는다)
+- `policy_index_v4`: 등급 구간 안의 지수. SAFE 70~100, WARN 40~69, DANGER 0~39. 높을수록 신뢰한다.
+  RTI나 허위 리뷰 확률이 아니다.
+- `text_probability_v4`: 보정된 의심 확률(0~1). `text_score_v4` = round((1-확률)*100)
+- 아직 v4 결과가 없는 리뷰(본문이 비었거나 재분석 전)는 v4 필드가 null이다. null은 0점이 아니다.
+- 상품 요약(`/api/v1/catalog`)은 `avg_policy_index_v4`, `v4_level_counts`,
+  `scored_review_count`(v4 결과가 있는 리뷰 수)를 쓴다.
 
 ## 오류 형식
 모든 오류는 `{"error": {"code", "message", "detail"}}` 형식이다. 분기는 `code` 로 한다.
@@ -152,26 +151,6 @@ class PlatformsOut(BaseModel):
 
 class ReviewAnalysisOut(BaseModel):
     review_id: str
-    rti: float | None = Field(None, description="v0.5 RTI 0~100. v2 결과와 계산 불가는 null")
-    level: Literal["safe", "warn", "danger"] | None = Field(None, description="v0.5 등급")
-    text_score: float | None = Field(None, description="0~100, 계산 불가는 null")
-    behavior_score: float | None = Field(None, description="0~100, 계산 불가는 null")
-    network_score: float | None = Field(None, description="0~100, 계산 불가는 null")
-    reasons: list[str] = Field(default_factory=list, description="v0.5 사유. v2 결과는 빈 배열")
-    policy_index_v3: float | None = Field(
-        None, description="v2 정책 지수 0~100. RTI·확률이 아니다. 계산 불가는 null"
-    )
-    evidence_level_v3: Literal["SAFE", "WARN", "DANGER"] | None = Field(
-        None, description="v2 등급. 70 이상 SAFE, 40 이상 WARN, 40 미만 DANGER"
-    )
-    analysis_summary_ko: str | None = Field(None, description="v2 한 문단 설명. 없을 수 있다")
-    rules_reasons_ko: list[str] = Field(
-        default_factory=list, description="v2 상세 근거 문장. 한 문단 설명이 없을 때 보여 준다"
-    )
-    evidence_reasons_v3: list[str] = Field(default_factory=list, description="v2 근거 코드")
-    reason_source: Literal["python", "groq", "rules"] | None = Field(
-        None, description="v2 설명을 만든 방식. rules면 한 문단 설명이 없다"
-    )
     text_probability_v4: float | None = Field(
         None, description="v4.0 텍스트 모델의 보정된 의심 확률 0~1. 아직 채우지 않았으면 null"
     )
@@ -206,8 +185,8 @@ class AnalysisJobOut(BaseModel):
 class AnalysisResponse(BaseModel):
     status: Literal["not_analyzed", "disabled", "queued", "running", "done", "failed", "stale"]
     is_current: bool = Field(description="결과가 지금 리뷰·목표 버전과 같은 입력인지")
-    contract_version: Literal["v0.5", "v2"] | None = Field(
-        None, description="결과를 받은 계약. 결과가 없으면 null"
+    contract_version: Literal["v0.5", "v2", "v4"] | None = Field(
+        None, description="결과를 받은 계약. v4로 전환된 결과는 v4다. 결과가 없으면 null"
     )
     model_version: str | None = None
     policy_version: str | None = None
@@ -225,16 +204,14 @@ class AnalysisResponse(BaseModel):
 class CatalogAnalysisOut(BaseModel):
     status: str
     is_current: bool
-    contract_version: Literal["v0.5", "v2"] | None = None
-    avg_rti: float | None = Field(None, description="v0.5 평균 RTI. v2 상품은 null")
-    avg_policy_index_v3: float | None = Field(None, description="v2 평균 정책 지수")
+    contract_version: Literal["v0.5", "v2", "v4"] | None = None
     avg_policy_index_v4: float | None = Field(
         None, description="v4.0 평균 정책 지수(0~100). v4 결과가 없으면 null"
     )
     v4_level_counts: dict[Literal["SAFE", "WARN", "DANGER"], int] | None = Field(
         None, description="v4.0 등급별 리뷰 수. v4 결과가 없으면 null"
     )
-    scored_review_count: int
+    scored_review_count: int = Field(description="v4 결과가 있는 리뷰 수")
     review_count: int
     source_review_count: int
     sampled: bool
@@ -348,38 +325,8 @@ JOB_RESPONSES: dict = {
     **VALIDATION_ERROR,
 }
 
-_V05_RESULT = {
+_V4_RESULT = {
     "review_id": "135039521",
-    "rti": 54.0,
-    "level": "warn",
-    "text_score": 54.0,
-    "behavior_score": None,
-    "network_score": None,
-    "reasons": ["TEXT_SHORT_REVIEW"],
-    "policy_index_v3": None,
-    "evidence_level_v3": None,
-    "analysis_summary_ko": None,
-    "rules_reasons_ko": [],
-    "evidence_reasons_v3": [],
-    "reason_source": None,
-    "text_probability_v4": None,
-    "text_score_v4": None,
-    "policy_index_v4": None,
-    "level_v4": None,
-    "model_version_v4": None,
-    "policy_version_v4": None,
-}
-_V2_RESULT = {
-    **_V05_RESULT,
-    "rti": None,
-    "level": None,
-    "reasons": [],
-    "policy_index_v3": 15.8,
-    "evidence_level_v3": "DANGER",
-    "analysis_summary_ko": "첨부 사진이 없고 별점 5점에 본문이 짧아 주의 근거로 반영됐습니다.",
-    "rules_reasons_ko": ["의미 있는 본문이 10자 미만이라 길이 감점이 크게 반영됐습니다."],
-    "evidence_reasons_v3": ["TEXT_SHORT"],
-    "reason_source": "python",
     "text_probability_v4": 0.031,
     "text_score_v4": 97.0,
     "policy_index_v4": 96.7,
@@ -414,23 +361,9 @@ ANALYSIS_RESPONSES: dict = {
         "description": "분석 상태와 이번 페이지 리뷰의 결과",
         "content": {
             "application/json": {
-                "examples": {
-                    "v2": {
-                        "summary": "v3.1 모델 (contract_version=v2)",
-                        "value": _analysis_example(
-                            _V2_RESULT,
-                            "v2",
-                            "ptext-koelectra-v3.1-b-seed20261115",
-                            "evidence-v3-balanced-interior-v1",
-                        ),
-                    },
-                    "v0.5": {
-                        "summary": "기존 모델 (contract_version=v0.5)",
-                        "value": _analysis_example(
-                            _V05_RESULT, "v0.5", "ptext-koelectra-v1-2epoch-20260929", "rti-v0.1"
-                        ),
-                    },
-                }
+                "example": _analysis_example(
+                    _V4_RESULT, "v4", "ptext-koelectra-v4.0", "text-first-v1"
+                )
             }
         },
     },
