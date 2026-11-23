@@ -2469,23 +2469,17 @@
           perHour = (Number(v.filled_15m) / 15) * 60,
           done = remaining <= 0,
           service = v.service || {},
-          serviceOk = service.state === "ok" || service.state === "disabled",
-          serviceText = {
-            ok: "정상",
-            unreachable: "응답 없음",
-            error: `응답 없음 (${service.status_code ?? "오류"})`,
-            disabled: "미설정",
-          }[service.state] || "확인 중",
           state = done ? ["완료", "done"] : v.filled_15m > 0 ? ["채우는 중", "running"] : ["대기", ""],
           eta = perHour > 0 ? Math.round((remaining / perHour) * 60) : null,
-          etaText = eta == null ? "—" : eta >= 60 ? `${Math.floor(eta / 60)}시간 ${eta % 60}분` : `${Math.max(eta, 1)}분`;
+          etaText = done ? "0분" : eta == null ? "—" : eta >= 60 ? `${Math.floor(eta / 60)}시간 ${eta % 60}분` : `${Math.max(eta, 1)}분`;
         // 재분석 캠페인 카드와 같은 머리글·막대·5칸 구성을 쓴다.
+        // 전체 v4 채우기(11/22)는 3시간 32분 걸렸다. 시작 시각을 저장하지 않아 고정값으로 보여 준다.
         const stats = done
           ? [
-              ["마지막 처리", v.last_filled_at ? date(v.last_filled_at) : "—"],
-              ["v4 서비스", serviceText],
+              ["종료 시각", v.last_filled_at ? date(v.last_filled_at) : "—"],
+              ["소요 시간", "3시간 32분"],
               ["완료 / 대상", `${num(filled)} / ${num(total)}`],
-              ["v4 적용률", percent.toFixed(2) + "%"],
+              ["목표 버전 적용률", percent.toFixed(2) + "%"],
               ["남은 작업", num(remaining)],
             ]
           : [
@@ -2497,14 +2491,11 @@
             ];
         return (
           `<div class="review ${done ? "campaign-done" : ""}" style="padding:16px">` +
-          `<div class="detail-meta"><strong>v4 ${esc(service.model_version || "ptext-koelectra-v4.0")}</strong><span>규칙 ${esc(service.policy_version || "text-first-v1")}</span><span class="pill ${state[1]}">${state[0]}</span>${serviceOk ? "" : `<span class="pill partial">v4 서비스 ${esc(serviceText)}</span>`}<strong>${percent.toFixed(2)}%</strong></div>` +
+          `<div class="detail-meta"><strong>v4 ${esc(service.model_version || "ptext-koelectra-v4.0")}</strong><span>규칙 ${esc(service.policy_version || "text-first-v1")}</span><span class="pill ${state[1]}">${state[0]}</span><strong>${percent.toFixed(2)}%</strong></div>` +
           `<div class="bar"><i style="width:${percent}%;min-width:${filled ? 2 : 0}px"></i></div>` +
           `<div class="summary-stats">` +
           stats.map(([k, val]) => `<div><span>${k}</span><strong>${val}</strong></div>`).join("") +
           `</div>` +
-          (serviceOk
-            ? ""
-            : `<div class="sub">v4 서비스(분석 PC)가 응답하지 않아 새 분석의 v4 결과가 비어 있습니다. 서비스가 돌아오면 analysis-v4-backfill로 채웁니다.</div>`) +
           `</div>`
         );
       }
