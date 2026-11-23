@@ -51,7 +51,7 @@ async def get_catalog(
         "items": [
             {
                 "product": _serialize_product(product, include_description=False),
-                "analysis": analysis,
+                "analysis": _public_catalog_analysis(analysis),
             }
             for product, analysis in items
         ],
@@ -68,6 +68,31 @@ def _api_error(status_code: int, code: str, message: str, detail: object = None)
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+# 공개 응답은 v4.0 결과만 내보낸다. v0.5·v3.1 칸은 저장소에 남아 있어도 응답에 싣지 않는다.
+PUBLIC_RESULT_FIELDS = (
+    "review_id",
+    "text_probability_v4",
+    "text_score_v4",
+    "policy_index_v4",
+    "level_v4",
+    "model_version_v4",
+    "policy_version_v4",
+)
+_HIDDEN_CATALOG_FIELDS = ("avg_rti", "avg_policy_index_v3")
+
+
+def _public_analysis(body: dict) -> dict:
+    body["results"] = [{k: r.get(k) for k in PUBLIC_RESULT_FIELDS} for r in body.get("results", [])]
+    return body
+
+
+def _public_catalog_analysis(analysis: dict) -> dict:
+    out = {k: v for k, v in analysis.items() if k not in _HIDDEN_CATALOG_FIELDS}
+    counts = analysis.get("v4_level_counts")
+    out["scored_review_count"] = sum(counts.values()) if counts else 0
+    return out
 
 
 def _serialize_product(row: ProductRow, *, include_description: bool = True) -> dict:
@@ -162,8 +187,10 @@ async def get_product(
         raise _api_error(400, "INVALID_CURSOR", "cursor 값이 올바르지 않습니다.", str(exc)) from exc
     status_code = 202 if result.status == "queued" else 200
     body = _build_body(result)
-    body["analysis"] = await AnalysisRepository(session).status(
-        platform, product_id, get_settings(), [r.review_id for r in result.reviews]
+    body["analysis"] = _public_analysis(
+        await AnalysisRepository(session).status(
+            platform, product_id, get_settings(), [r.review_id for r in result.reviews]
+        )
     )
     await session.commit()
     return JSONResponse(status_code=status_code, content=body)
@@ -194,8 +221,8 @@ async def get_job(
     summary="저장된 분석 상태·결과 조회",
     description="review_count는 분석 건수, source_review_count는 저장 원본 건수다. "
     "sampled=true는 별점 분포 대표 표본이며 results에는 현재 페이지의 실제 분석 결과만 포함한다. "
-    "contract_version이 v2이면 policy_index_v3·evidence_level_v3·analysis_summary_ko를, "
-    "v0.5이면 rti·level·reasons를 읽는다.",
+    "results에는 v4.0 결과(policy_index_v4·level_v4 등)만 담긴다. "
+    "아직 v4 결과가 없는 리뷰는 v4 필드가 null이다.",
     response_model=None,
     responses=docs.ANALYSIS_RESPONSES,
 )
@@ -214,8 +241,10 @@ async def get_analysis(
         )
     except InvalidCursorError as exc:
         raise _api_error(400, "INVALID_CURSOR", "cursor 값이 올바르지 않습니다.") from exc
-    body = await AnalysisRepository(session).status(
-        platform, product_id, get_settings(), [r.review_id for r in reviews]
+    body = _public_analysis(
+        await AnalysisRepository(session).status(
+            platform, product_id, get_settings(), [r.review_id for r in reviews]
+        )
     )
     body["next_cursor"] = next_cursor
     return body

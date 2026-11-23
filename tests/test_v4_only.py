@@ -142,10 +142,38 @@ async def test_adopt_marks_filled_jobs_current_without_reanalysis(session_factor
         assert await AnalysisRepository(s).enqueue("kurly", "p", settings) == job.id
         status = await AnalysisRepository(s).status("kurly", "p", settings)
     assert job.model_version == MODEL and job.input_payload["model_version"] == MODEL
-    assert job.result["adopted_from"] == {"model_version": "v1", "policy_version": "p1"}
+    assert job.result["adopted_from"] == {
+        "model_version": "v1",
+        "policy_version": "p1",
+        "contract_version": "v2",
+    }
+    assert job.result["contract_version"] == "v4"
     assert (control.model_version, control.policy_version) == (MODEL, POLICY)
     assert all(r.policy_index_v3 == 80.4 for r in rows)  # 기존 칸 값은 지우지 않는다
     assert status["is_current"]
     # 두 번 돌려도 바뀌는 것이 없다.
     async with session_factory() as s:
         assert (await v4_adopt.adopt(s, model_version=MODEL, policy_version=POLICY))["adopted"] == 0
+
+
+def test_public_responses_carry_v4_fields_only():
+    from review_data.api.v1 import PUBLIC_RESULT_FIELDS, _public_analysis, _public_catalog_analysis
+
+    row = {k: 1 for k in PUBLIC_RESULT_FIELDS} | {
+        "rti": 50,
+        "policy_index_v3": 80.4,
+        "level": "warn",
+    }
+    body = _public_analysis({"status": "done", "results": [row]})
+    assert set(body["results"][0]) == set(PUBLIC_RESULT_FIELDS)
+    summary = _public_catalog_analysis(
+        {
+            "status": "done",
+            "avg_rti": 50,
+            "avg_policy_index_v3": 80,
+            "scored_review_count": 9,
+            "v4_level_counts": {"SAFE": 2, "WARN": 1, "DANGER": 0},
+        }
+    )
+    assert "avg_rti" not in summary and "avg_policy_index_v3" not in summary
+    assert summary["scored_review_count"] == 3
