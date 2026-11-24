@@ -462,6 +462,35 @@ async def _run_v4_backfill(concurrency: int, max_jobs: int) -> None:
         await engine.dispose()
 
 
+@app.command("analysis-adopt-v4")
+def analysis_adopt_v4(
+    model_version: str = typer.Option("ptext-koelectra-v4.0", "--model"),
+    policy_version: str = typer.Option("text-first-v1", "--policy"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="바꾸지 않고 대상 수만 셉니다."),
+) -> None:
+    """v4 결과가 채워진 완료 작업을 v4 결과로 인정하고 대시보드 목표 버전을 v4로 바꿉니다."""
+    _require_env()
+    asyncio.run(_run_adopt_v4(model_version, policy_version, dry_run))
+
+
+async def _run_adopt_v4(model_version: str, policy_version: str, dry_run: bool) -> None:
+    from review_data.core.service import v4_adopt
+
+    engine = create_engine()
+    try:
+        async with create_session_factory(engine)() as session:
+            result = await v4_adopt.adopt(
+                session, model_version=model_version, policy_version=policy_version, dry_run=dry_run
+            )
+            if dry_run:
+                await session.rollback()
+            else:
+                await session.commit()
+        typer.echo(json.dumps(result, ensure_ascii=False))
+    finally:
+        await engine.dispose()
+
+
 @app.command("analysis-backfill")
 def analysis_backfill(force: bool = typer.Option(False, "--force")) -> None:
     """기존 리뷰에 분석 작업을 예약합니다. --force는 같은 입력도 다시 분석합니다."""

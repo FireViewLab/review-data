@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 from review_data.core.base import BaseCollector
 from review_data.core.db.models import ProductRow
+from review_data.core.db.pipeline_control import set_paused
 from review_data.core.db.repository import (
     CollectionJobRepository,
     ProductRepository,
@@ -58,6 +59,40 @@ async def test_ttl_miss_creates_job_once(session):
     assert first.job is not None
     # 동시/반복 요청에도 활성 job은 하나만 생성된다 (idempotency).
     assert first.job.id == second.job.id
+
+
+async def test_paused_collection_returns_stored_product_without_job(session):
+    # 수집을 멈춘 동안 만든 job 은 실행되지 않아, 화면이 '새로 수집 중'을 끝없이 그렸다 (#233)
+    platform, pid = "testplat", "paused-1"
+    old = datetime.now(UTC) - timedelta(days=1)
+    session.add(
+        ProductRow(
+            platform=platform,
+            product_id=pid,
+            name="오래된상품",
+            url="https://x",
+            last_collected_at=old,
+        )
+    )
+    await session.flush()
+    await set_paused(session, "collection", True)
+
+    result = await CollectionService(session).get_or_queue(platform, pid)
+
+    assert result.status == "stale"
+    assert result.product is not None
+    assert result.job is None
+    assert await CollectionJobRepository(session).get_active(platform, pid) is None
+
+
+async def test_paused_collection_still_queues_unknown_product(session):
+    # 처음 보는 상품은 보여줄 데이터가 없으므로 job 을 만들어 재개 직후 수집되게 둔다
+    await set_paused(session, "collection", True)
+
+    result = await CollectionService(session).get_or_queue("testplat", "paused-new")
+
+    assert result.status == "queued"
+    assert result.job is not None
 
 
 async def test_cold_start_returns_queued_without_product(session):

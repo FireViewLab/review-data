@@ -76,6 +76,9 @@ def test_search_registers_and_catalog_auth_cursor_are_enforced(engine, monkeypat
         page = client.get("/api/v1/catalog", headers=headers).json()
         assert page["items"][0]["product"]["product_id"] == "p"
         assert page["items"][0]["analysis"]["status"] == "not_analyzed"
+        # 공개 응답은 v4 요약만 싣는다.
+        assert not {"avg_rti", "avg_policy_index_v3"} & page["items"][0]["analysis"].keys()
+        assert page["items"][0]["analysis"]["scored_review_count"] == 0
         assert (
             client.get("/api/v1/catalog", params={"cursor": "bad"}, headers=headers).status_code
             == 400
