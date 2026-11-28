@@ -1855,6 +1855,8 @@
           </h2>
           <div id="analysis-backfill">
           </div>
+          <div id="analysis-queue">
+          </div>
           <div id="v4-progress">
           </div>
           <div id="campaigns">
@@ -2460,6 +2462,49 @@
           ];
         return ["alive", "활성", ""];
       }
+      function durationText(seconds) {
+        const minutes = Math.max(1, Math.ceil(seconds / 60)),
+          days = Math.floor(minutes / 1440),
+          hours = Math.floor((minutes % 1440) / 60),
+          rest = minutes % 60;
+        return [days ? `${days}일` : "", hours ? `${hours}시간` : "", rest ? `${rest}분` : ""]
+          .filter(Boolean)
+          .join(" ");
+      }
+      // 작업마다 리뷰 수가 달라 리뷰 수 기준으로 속도와 남은 시간을 보여 준다.
+      function backlogCard(b) {
+        if (!b) return "";
+        const state = {
+            idle: ["비어 있음", "done"],
+            estimated: ["줄어드는 중", "running"],
+            growing: ["유입이 더 많음", "partial"],
+            stalled: ["완료 없음", "partial"],
+          }[b.state] || ["확인 중", ""],
+          eta = {
+            idle: "0분",
+            estimated: b.estimated_remaining_seconds != null ? durationText(b.estimated_remaining_seconds) : "—",
+            growing: "미정",
+            stalled: "미정",
+          }[b.state] || "—",
+          rate = (v) => (v == null ? "—" : `${num(v)}건/분`);
+        const stats = [
+          ["남은 작업", num(b.backlog_jobs)],
+          ["남은 리뷰", num(b.backlog_reviews)],
+          ["처리 속도", rate(b.reviews_per_minute)],
+          ["순감소", rate(b.net_reviews_per_minute)],
+          ["예상 남은 시간", eta],
+        ];
+        const oldest = b.oldest_queued_seconds != null ? `가장 오래 기다린 작업 ${durationText(b.oldest_queued_seconds)} 전 · ` : "";
+        return (
+          `<div class="review" style="padding:16px">` +
+          `<div class="detail-meta"><strong>분석 대기열</strong><span class="pill ${state[1]}">${state[0]}</span><span>처리 중 ${num(b.running_jobs)}건</span></div>` +
+          `<div class="summary-stats">` +
+          stats.map(([k, val]) => `<div><span>${k}</span><strong>${val}</strong></div>`).join("") +
+          `</div>` +
+          `<div class="sub">${oldest}최근 ${b.window_minutes}분 완료 ${num(b.done_jobs)}건(리뷰 ${num(b.done_reviews)}) · 유입 ${num(b.new_jobs)}건(리뷰 ${num(b.new_reviews)}) 기준. 유입이 처리보다 많으면 남은 시간을 정하지 않습니다.</div>` +
+          `</div>`
+        );
+      }
       function v4Card(v) {
         if (!v || !v.target_jobs) return "";
         const filled = Number(v.filled_jobs),
@@ -2737,6 +2782,7 @@
           $("target-model").value = control.model_version;
           $("target-policy").value = control.policy_version;
         }
+        $("analysis-queue").innerHTML = backlogCard(d.analysis_backlog);
         $("v4-progress").innerHTML = v4Card(d.v4);
         const all = d.analysis_campaigns || [],
           campaigns = all.filter((c) => c.status !== "running" && c.status !== "superseded"),
