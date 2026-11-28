@@ -42,3 +42,32 @@ async def test_same_input_reuses_job_after_signature_added(session_factory):
     job_id = await seed(session_factory, settings)
     async with session_factory() as s:
         assert await AnalysisRepository(s).enqueue("kurly", "p", settings) == job_id
+
+
+async def _campaign_items(session_factory, settings):
+    from review_data.core.db.models import AnalysisCampaignItem
+    from tests.test_analysis_refresh import tick
+
+    await tick(session_factory, settings)
+    async with session_factory() as s:
+        return sorted((await s.execute(select(AnalysisCampaignItem.product_id))).scalars().all())
+
+
+async def test_campaign_skips_current_jobs_with_and_without_signature(session_factory):
+    from sqlalchemy import update
+
+    from tests.test_analysis_refresh import config as refresh_config
+    from tests.test_analysis_refresh import seed as refresh_seed
+
+    await refresh_seed(session_factory, count=3, version="v1")
+    async with session_factory() as s:
+        # 상품 0은 옛 작업처럼 서명이 없다. JSON을 읽어 같은 결론을 내야 한다.
+        await s.execute(
+            update(AnalysisJob).where(AnalysisJob.product_id == "0").values(input_signature=None)
+        )
+        # 상품 1은 서명이 다른 기준이다. 재분석 대상이 된다.
+        await s.execute(
+            update(AnalysisJob).where(AnalysisJob.product_id == "1").values(input_signature="old")
+        )
+        await s.commit()
+    assert await _campaign_items(session_factory, refresh_config("v1")) == ["1"]
