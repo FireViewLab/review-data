@@ -29,6 +29,8 @@ def create_engine() -> AsyncEngine:
         settings.database_url,
         pool_recycle=settings.database_pool_recycle_seconds,
         pool_pre_ping=True,
+        # 예외 문자열에 SQL 파라미터(리뷰 본문 등)가 실려 로그와 작업 오류 칸에 남지 않게 한다.
+        hide_parameters=True,
     )
 
 
