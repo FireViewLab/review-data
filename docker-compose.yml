@@ -6,8 +6,16 @@
 #
 # 필요한 값은 같은 폴더의 .env 에서 읽는다 (.env.example 참고).
 
+# 로그는 서비스마다 20MB 파일 5개까지만 남긴다. 기본값(json-file)은 제한이 없어 디스크를 채운다.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-20m}
+    max-file: ${LOG_MAX_FILE:-5}
+
 x-app: &app
   image: ${IMAGE:-ghcr.io/fireviewlab/review-data:latest}
+  logging: *logging
   build: .
   env_file: .env
   environment:
@@ -20,6 +28,7 @@ x-app: &app
 services:
   db:
     image: postgres:16-alpine
+    logging: *logging
     environment:
       POSTGRES_DB: review_data
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -118,6 +127,7 @@ services:
   # 서버에서만 켠다(COMPOSE_PROFILES=proxy). 로컬에서는 localhost:8000 으로 바로 붙는다.
   caddy:
     image: caddy:2-alpine
+    logging: *logging
     profiles: ["proxy"]
     ports:
       - "80:80"
