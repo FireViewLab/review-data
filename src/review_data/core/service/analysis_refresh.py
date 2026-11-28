@@ -13,6 +13,7 @@ from review_data.core.db.analysis_repository import (
     FAILURE_KINDS,
     INPUT_VERSION,
     AnalysisRepository,
+    target_signature,
 )
 from review_data.core.db.models import AnalysisCampaign, AnalysisCampaignItem, AnalysisJob
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
@@ -86,11 +87,13 @@ class AnalysisRefreshService:
                     AND j.product_id=p.product_id AND j.status='done'
                     AND j.model_version=:model AND j.policy_version=:policy
                     AND j.input_hash=p.analysis_input_hash
-                    AND j.input_payload->>'model_version'=:model
-                    AND j.input_payload->>'policy_version'=:policy
-                    AND j.input_payload->'sampling'->>'policy_version'=:sampling
-                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
-                    AND j.input_payload->>'input_version'=:input_version)
+                    -- 서명이 있는 작업은 input_payload(리뷰 최대 500건)를 열지 않고 비교한다.
+                    AND (j.input_signature=:signature OR (j.input_signature IS NULL
+                        AND j.input_payload->>'model_version'=:model
+                        AND j.input_payload->>'policy_version'=:policy
+                        AND j.input_payload->'sampling'->>'policy_version'=:sampling
+                        AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
+                        AND j.input_payload->>'input_version'=:input_version)))
             """),
                 {
                     "campaign": campaign.id,
@@ -99,6 +102,7 @@ class AnalysisRefreshService:
                     "sampling": SAMPLING_VERSION,
                     "max_reviews": s.ai_max_reviews,
                     "input_version": INPUT_VERSION,
+                    "signature": target_signature(s),
                 },
             )
         if reactivate and campaign.status == "superseded":
@@ -248,11 +252,13 @@ class AnalysisRefreshService:
                     AND j.product_id=p.product_id AND j.status='done'
                     AND j.model_version=:model AND j.policy_version=:policy
                     AND j.input_hash=p.analysis_input_hash
-                    AND j.input_payload->>'model_version'=:model
-                    AND j.input_payload->>'policy_version'=:policy
-                    AND j.input_payload->'sampling'->>'policy_version'=:sampling
-                    AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
-                    AND j.input_payload->>'input_version'=:input_version)
+                    -- 서명이 있는 작업은 input_payload(리뷰 최대 500건)를 열지 않고 비교한다.
+                    AND (j.input_signature=:signature OR (j.input_signature IS NULL
+                        AND j.input_payload->>'model_version'=:model
+                        AND j.input_payload->>'policy_version'=:policy
+                        AND j.input_payload->'sampling'->>'policy_version'=:sampling
+                        AND (j.input_payload->'sampling'->>'max_reviews')::int=:max_reviews
+                        AND j.input_payload->>'input_version'=:input_version)))
                 ON CONFLICT(campaign_id,platform,product_id) DO UPDATE
                     SET status='pending',analysis_job_id=NULL
                 RETURNING product_id
@@ -266,6 +272,7 @@ class AnalysisRefreshService:
                         "sampling": SAMPLING_VERSION,
                         "max_reviews": settings.ai_max_reviews,
                         "input_version": INPUT_VERSION,
+                        "signature": target_signature(settings),
                     },
                 )
             )
