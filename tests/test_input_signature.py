@@ -71,3 +71,22 @@ async def test_campaign_skips_current_jobs_with_and_without_signature(session_fa
         )
         await s.commit()
     assert await _campaign_items(session_factory, refresh_config("v1")) == ["1"]
+
+
+async def test_fill_all_fills_legacy_jobs_in_batches(session_factory):
+    from sqlalchemy import update
+
+    from review_data.core.service.input_signature import fill_all
+    from tests.test_analysis_refresh import seed as refresh_seed
+
+    await refresh_seed(session_factory, count=3, version="v1")
+    async with session_factory() as s:
+        await s.execute(update(AnalysisJob).values(input_signature=None))
+        await s.commit()
+    first = await fill_all(session_factory, batch_size=2, max_batches=1)
+    assert first == {"filled": 2, "batches": 1, "remaining": 1}
+    rest = await fill_all(session_factory, batch_size=2)
+    assert rest == {"filled": 1, "batches": 1, "remaining": 0}
+    async with session_factory() as s:
+        jobs = (await s.scalars(select(AnalysisJob))).all()
+    assert all(j.input_signature == payload_signature(j.input_payload) for j in jobs)
