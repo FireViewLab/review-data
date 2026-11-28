@@ -52,6 +52,8 @@ def test_login_cookie_is_scoped_and_logout_revokes_browser_session(engine, dashb
         summary = client.get("/status/api/overview")
         assert summary.status_code == 200, summary.text
         assert summary.headers["cache-control"] == "no-store"
+        backlog = summary.json()["analysis_backlog"]
+        assert backlog["state"] == "idle" and backlog["backlog_reviews"] == 0
         assert client.get("/api/v1/catalog").status_code == 401
         assert client.get("/status/api/jobs/analysis?limit=101").status_code == 422
         assert client.get("/status/api/jobs/analysis/99999").status_code == 404
