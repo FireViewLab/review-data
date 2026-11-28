@@ -27,6 +27,7 @@ from review_data.core.db.analysis_repository import (
 )
 from review_data.core.db.models import AnalysisNode, AnalysisRefreshControl
 from review_data.core.db.pipeline_control import pipeline_state, set_paused
+from review_data.core.service.analysis_backlog import backlog_status
 from review_data.core.service.analysis_refresh import (
     AnalysisRefreshService,
     campaign_status,
@@ -493,6 +494,7 @@ async def build_overview(app, session) -> dict:
     """,
     )
     result["v4"] = await v4_progress(session, settings)
+    result["analysis_backlog"] = await backlog_status(session)
     # 빠른 영역은 같은 시점 값으로 맞춰 함께 싣는다. 화면은 /api/live 값으로 계속 덮어쓴다.
     live = await build_live(app, session)
     live["rates_15m"]["new_reviews"] = sum(row["new_reviews"] for row in metrics)
