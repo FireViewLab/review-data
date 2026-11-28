@@ -9,8 +9,15 @@ v3.1 계약 시절에 v4 결과를 함께 채운 작업은 같은 입력의 v4 �
 
 from sqlalchemy import func, select, text
 
+from review_data.core.db.analysis_repository import signature_sql
 from review_data.core.db.models import AnalysisRefreshControl
 from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
+
+# SET 절의 다른 칸은 바꾸기 전 값을 읽으므로 서명은 바뀐 입력으로 따로 계산한다.
+_NEW_PAYLOAD = (
+    "(t.input_payload || jsonb_build_object('model_version', CAST(:model AS text), "
+    "'policy_version', CAST(:policy AS text)))"
+)
 
 _CANDIDATES = """
 FROM analysis_jobs j
@@ -41,6 +48,9 @@ async def adopt(session, *, model_version: str, policy_version: str, dry_run: bo
                     policy_version = :policy,
                     input_payload = t.input_payload || jsonb_build_object(
                         'model_version', :model, 'policy_version', :policy),
+                    input_signature = """
+                + signature_sql(_NEW_PAYLOAD)
+                + """,
                     updated_at = now()
                 WHERE t.id IN (SELECT j.id """
                 + _CANDIDATES

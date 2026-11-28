@@ -5,7 +5,11 @@ import pytest
 from sqlalchemy import select
 
 from review_data.core import v4_client
-from review_data.core.db.analysis_repository import AnalysisRepository
+from review_data.core.db.analysis_repository import (
+    AnalysisRepository,
+    payload_signature,
+    target_signature,
+)
 from review_data.core.db.models import AnalysisJob, AnalysisRefreshControl, ReviewAnalysisRow
 from review_data.core.service import v4_adopt
 from review_data.core.settings import Settings
@@ -142,6 +146,9 @@ async def test_adopt_marks_filled_jobs_current_without_reanalysis(session_factor
         assert await AnalysisRepository(s).enqueue("kurly", "p", settings) == job.id
         status = await AnalysisRepository(s).status("kurly", "p", settings)
     assert job.model_version == MODEL and job.input_payload["model_version"] == MODEL
+    # 입력 서명도 바뀐 입력 기준으로 고쳐 재분석 대상 판정이 JSON을 열지 않는다.
+    assert job.input_signature == payload_signature(job.input_payload)
+    assert job.input_signature == target_signature(settings)
     assert job.result["adopted_from"] == {
         "model_version": "v1",
         "policy_version": "p1",

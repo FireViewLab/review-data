@@ -42,6 +42,46 @@ def input_hash(reviews: list[dict]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def input_signature(input_version, model_version, policy_version, sampling_version, max_reviews):
+    """버전 비교용 입력 서명. 같은 값이면 같은 기준으로 만든 분석 입력이다."""
+    parts = (input_version, model_version, policy_version, sampling_version, max_reviews)
+    return "|".join("" if value is None else str(value) for value in parts)
+
+
+def payload_signature(payload: dict | None) -> str:
+    payload = payload or {}
+    sampling = payload.get("sampling") or {}
+    return input_signature(
+        payload.get("input_version"),
+        payload.get("model_version"),
+        payload.get("policy_version"),
+        sampling.get("policy_version"),
+        sampling.get("max_reviews"),
+    )
+
+
+def target_signature(settings: Settings) -> str:
+    return input_signature(
+        INPUT_VERSION,
+        settings.ai_model_version,
+        settings.ai_policy_version,
+        SAMPLING_VERSION,
+        settings.ai_max_reviews,
+    )
+
+
+def signature_sql(payload: str = "input_payload") -> str:
+    """payload_signature와 같은 값을 SQL에서 만든다. 옛 작업을 채우거나 비교할 때 쓴다."""
+    fields = (
+        f"{payload}->>'input_version'",
+        f"{payload}->>'model_version'",
+        f"{payload}->>'policy_version'",
+        f"{payload}->'sampling'->>'policy_version'",
+        f"{payload}->'sampling'->>'max_reviews'",
+    )
+    return "concat_ws('|', " + ", ".join(f"coalesce({f}, '')" for f in fields) + ")"
+
+
 def published_condition(job=AnalysisJob):
     # 예전 배포가 stale로 표시한 완료 이력도 복구한다. 미완료 작업은 선택하지 않는다.
     return or_(
@@ -307,6 +347,7 @@ class AnalysisRepository:
             product_id=product_id,
             input_hash=digest,
             input_payload=payload,
+            input_signature=payload_signature(payload),
             input_review_count=len(selected),
             trigger_collection_job_id=trigger,
             status="queued",

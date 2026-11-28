@@ -462,6 +462,29 @@ async def _run_v4_backfill(concurrency: int, max_jobs: int) -> None:
         await engine.dispose()
 
 
+@app.command("analysis-fill-input-signature")
+def analysis_fill_input_signature(
+    batch_size: int = typer.Option(500, "--batch-size", min=1, max=5000),
+    max_batches: int = typer.Option(0, "--max-batches", min=0, help="0이면 끝까지"),
+) -> None:
+    """서명이 빈 옛 분석 작업의 입력 서명을 묶음으로 나눠 채웁니다."""
+    _require_env()
+    asyncio.run(_run_fill_input_signature(batch_size, max_batches))
+
+
+async def _run_fill_input_signature(batch_size: int, max_batches: int) -> None:
+    from review_data.core.service.input_signature import fill_all
+
+    engine = create_engine()
+    try:
+        result = await fill_all(
+            create_session_factory(engine), batch_size=batch_size, max_batches=max_batches
+        )
+        typer.echo(json.dumps(result, ensure_ascii=False))
+    finally:
+        await engine.dispose()
+
+
 @app.command("analysis-adopt-v4")
 def analysis_adopt_v4(
     model_version: str = typer.Option("ptext-koelectra-v4.0", "--model"),

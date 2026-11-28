@@ -324,3 +324,5 @@ AI 분석 탭의 분석 대기열 카드는 작업 수가 아니라 입력 리�
 ### 모델 업데이트 재분석
 
 새 모델·정책 버전을 확정한 뒤 `ANALYSIS_REFRESH_ENABLED=true`로 활성화하면 큐 용량에 맞춰 기존 상품을 재분석한다. 새 결과 저장 전 기존 성공 결과를 유지하고 `/status`에서 진행률을 확인한다. [운영 순서](docs/projects/review-data/specs/2026-10-10-analysis-refresh.md)와 [리뷰 선정 기준](docs/projects/review-data/specs/2026-10-09-review-analysis-selection.md)을 참고한다.
+
+재분석 대상은 분석 작업의 입력 서명(`input_signature`: 입력·모델·정책 버전, 표본 기준, 최대 리뷰 수)으로 고른다. 서명 컬럼 추가 전에 만든 작업은 `crawler analysis-fill-input-signature --batch-size 500`으로 나눠 채운다. 채우기 전에는 지금처럼 분석 입력을 열어 비교하므로 결과는 같고 느리기만 하다.
