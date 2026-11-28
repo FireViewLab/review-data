@@ -1,6 +1,7 @@
 """실 DB에서 재분석 재개·큐 상한·결과 유지·실패 복구를 검증한다."""
 
 import asyncio
+import contextlib
 
 from sqlalchemy import func, select, update
 
@@ -535,3 +536,51 @@ async def test_obsolete_queue_retired_without_repeating_current_success(session_
     async with session_factory() as s:
         assert (await s.get(AnalysisJob, old_id)).status == "stale"
         assert (await campaign_status(s))[0]["total"] == 0
+
+
+async def test_worker_refresh_skips_when_scheduler_holds_lock(session_factory):
+    from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
+
+    await seed(session_factory)
+    async with session_factory() as holder:
+        # 스케줄러가 대상 생성 중이라 예약 잠금을 쥐고 있는 상태
+        await holder.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+        async with session_factory() as s:
+            result = await asyncio.wait_for(
+                AnalysisRefreshService(s, config()).run_once(wait_for_lock=False), timeout=5
+            )
+        assert result == {"enabled": True, "reserved": 0, "reason": "locked"}
+        await holder.rollback()
+    # 잠금이 풀리면 같은 호출이 예약한다.
+    async with session_factory() as s:
+        result = await AnalysisRefreshService(s, config()).run_once(wait_for_lock=False)
+        await s.commit()
+    assert result["reserved"] == 1
+
+
+async def test_worker_keeps_claiming_while_refresh_lock_is_held(session_factory, monkeypatch):
+    from review_data.core.service.scheduling import _SCHEDULER_LOCK_KEY
+    from review_data.worker import analysis_worker
+
+    await seed(session_factory, count=1, done=False)
+    monkeypatch.setattr(analysis_worker, "_analysis_client", lambda settings, payload: Client("v1"))
+    settings = config("v1", analysis_concurrency=1)
+    async with session_factory() as holder:
+        await holder.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+        worker = asyncio.create_task(
+            analysis_worker.run_forever(session_factory, "w", poll_interval=0.05, settings=settings)
+        )
+        try:
+            # 예약 잠금이 풀리지 않아도 슬롯 하나뿐인 워커가 대기 작업을 처리한다.
+            for _ in range(100):
+                async with session_factory() as s:
+                    status = await s.scalar(select(AnalysisJob.status))
+                if status == "done":
+                    break
+                await asyncio.sleep(0.05)
+            assert status == "done"
+        finally:
+            worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker
+            await holder.rollback()

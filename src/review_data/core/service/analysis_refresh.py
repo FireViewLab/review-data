@@ -30,13 +30,23 @@ class AnalysisRefreshService:
         self.session = session
         self.settings = settings
 
-    async def run_once(self, *, retry_failed=False, reactivate=False):
+    async def run_once(self, *, retry_failed=False, reactivate=False, wait_for_lock=True):
+        """wait_for_lock=False면 예약 잠금을 다른 곳이 쥐고 있을 때 기다리지 않고 건너뛴다.
+
+        분석 워커가 쓴다. 대상 생성처럼 오래 걸리는 예약을 기다리는 동안 작업을 꺼내지 못하면
+        안 되기 때문이다. 스케줄러가 같은 예약을 주기마다 하므로 건너뛰어도 빠지는 일은 없다.
+        """
         s = await effective_analysis_settings(self.session, self.settings)
         if not s.analysis_refresh_enabled or not s.ai_analysis_enabled:
             return {"enabled": False, "reserved": 0}
         if not s.ai_model_version or not s.ai_policy_version:
             return {"enabled": True, "reserved": 0, "reason": "target_version_required"}
-        await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+        if wait_for_lock:
+            await self.session.execute(select(func.pg_advisory_xact_lock(_SCHEDULER_LOCK_KEY)))
+        elif not await self.session.scalar(
+            select(func.pg_try_advisory_xact_lock(_SCHEDULER_LOCK_KEY))
+        ):
+            return {"enabled": True, "reserved": 0, "reason": "locked"}
         key = hashlib.sha256(
             json.dumps(
                 [

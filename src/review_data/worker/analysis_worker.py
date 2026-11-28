@@ -265,6 +265,7 @@ async def run_forever(
     guard = OutageGuard(settings)
     slots = settings.analysis_concurrency
     await asyncio.gather(
+        _refresh_loop(factory, settings, poll_interval=poll_interval),
         *(
             _slot(
                 factory,
@@ -273,24 +274,32 @@ async def run_forever(
                 settings=settings,
                 backfill_only=backfill_only,
                 guard=guard,
-                refresh=index == 0,
             )
             for index in range(slots)
-        )
+        ),
     )
 
 
-async def _slot(factory, worker_id, *, poll_interval, settings, backfill_only, guard, refresh):
-    while True:
-        if refresh:
-            try:
-                from review_data.core.service.analysis_refresh import AnalysisRefreshService
+async def _refresh_loop(factory, settings, *, poll_interval):
+    """재분석 대상 예약을 작업 처리와 따로 돌린다.
 
-                async with factory() as session:
-                    await AnalysisRefreshService(session, settings).run_once()
-                    await session.commit()
-            except Exception:
-                logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
+    예약이 오래 걸려도(목표 버전을 바꾼 직후 대상 생성) 슬롯은 계속 작업을 꺼낸다. 잠금을 다른 곳이
+    쥐고 있으면 기다리지 않고 다음 주기로 넘긴다.
+    """
+    from review_data.core.service.analysis_refresh import AnalysisRefreshService
+
+    while True:
+        try:
+            async with factory() as session:
+                await AnalysisRefreshService(session, settings).run_once(wait_for_lock=False)
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.warning("재분석 대상 예약 실패: 다음 주기에 다시 확인한다.")
+        await asyncio.sleep(poll_interval)
+
+
+async def _slot(factory, worker_id, *, poll_interval, settings, backfill_only, guard):
+    while True:
         # 장애로 멈춘 동안에는 작업을 꺼내지 않아 대기 작업의 시도 횟수가 그대로 남는다.
         if wait := guard.wait_seconds():
             await asyncio.sleep(min(wait, poll_interval))
