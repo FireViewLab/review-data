@@ -151,7 +151,8 @@ async def test_platform_status_states_and_failure_kinds(session):
     assert items["coupang"]["state"] == "excluded" and items["coupang"]["label"] == "쿠팡"
     # 수집 이력이 없는 플랫폼은 정상이 아니라 미수집이다.
     assert items["gmarket"]["state"] == "inactive" and items["gmarket"]["pending"] == 0
-    assert "429" not in str(items)
+    # 시각 값에 숫자 429가 섞일 수 있어 원본 오류 문구로 확인한다.
+    assert "Too Many Requests" not in str(items) and "HTTPStatusError" not in str(items)
 
 
 @pytest.fixture
